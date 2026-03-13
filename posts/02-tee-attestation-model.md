@@ -4,9 +4,11 @@
 
 ---
 
-Attestation is the mechanism by which a TEE proves its identity to an external party. It answers a deceptively simple question: *Is this specific code running on genuine hardware in a secure configuration?*
+Attestation is the mechanism by which a TEE proves its identity to an external party.
+Most modern TEEs follow a remote attestation model similar to
+[Intel SGX attestation](https://www.intel.com/content/www/us/en/developer/tools/software-guard-extensions/overview.html). It answers a deceptively simple question: *Is this specific code running on genuine hardware in a secure configuration?*
 
-The answer takes the form of a cryptographic proof-a signed statement that binds a measurement (hash of the enclave) to a hardware-rooted key. This proof is non-interactive: the verifier doesn't need to communicate with the enclave during verification. They receive a blob, validate it against known-good values, and decide whether to trust the enclave's outputs.
+The answer takes the form of a cryptographic proof a signed statement that binds a measurement (hash of the enclave) to a hardware-rooted key. This proof is non-interactive: the verifier doesn't need to communicate with the enclave during verification. They receive a blob, validate it against known-good values, and decide whether to trust the enclave's outputs.
 
 This post covers the attestation model independent of any specific platform. We will examine local and remote attestation, how measurements establish identity, what the resulting quote contains, and how verification works-including how attestation maps to ZK circuits for on-chain verification.
 
@@ -24,7 +26,7 @@ TEE attestation goes further. It proves:
 2. **Hardware authenticity:** The CPU is genuine, manufactured by the claimed vendor
 3. **Configuration integrity:** Security-relevant settings (debug mode, memory encryption) are in the expected state
 
-The proof is rooted in hardware. A key burned into the CPU during manufacturing signs the attestation. No software-not the OS, not the hypervisor, not even the enclave itself-can forge this signature.
+The proof is rooted in hardware. Attestation ultimately derives its authority from secrets rooted in the CPU hardware during manufacturing. These hardware secrets derive the attestation keys used to sign quotes.
 
 ---
 
@@ -38,7 +40,7 @@ Local attestation enables two enclaves on the same physical CPU to verify each o
 sequenceDiagram
     participant A as Enclave A
     participant B as Enclave B
-    participant CPU as CPU (Report Key)
+    participant CPU as CPU (REPORT_KEY derivation)
     
     A->>B: 1. Request attestation
     B->>CPU: Generate Report(target=A)
@@ -78,33 +80,40 @@ Remote attestation extends the trust proof to any external verifier-across netwo
 
 ### The Flow
 
+
 ```mermaid
 flowchart TD
-    subgraph TEE_Platform["TEE Platform"]
-        AppEnclave["Application Enclave<br>MRENCLAVE: 0xabc123..."]
+    subgraph TEEPlatform["TEE Platform"]
+        App["Application Enclave<br>MRENCLAVE: 0xabc123..."]
         QE["Quoting Enclave (QE)<br>Signs with Attestation Key"]
-        PSE["Platform Services<br>Manages certificates"]
+        CollateralSvc["Platform / Collateral Services"]
         
-        AppEnclave -->|"1. Report"| QE
-        QE -->|"2. Quote"| PSE
+        App -->|"1. Local report"| QE
+        QE -->|"2. Quote"| QuoteOut["Quote"]
+        CollateralSvc -->|"3. Collateral"| CollateralOut["Cert chain + TCB info + revocation data"]
     end
-    
-    PSE -->|"3. Quote + Collateral"| Verifier
     
     subgraph Verifier["Remote Verifier"]
+        Input["Quote + Collateral"]
         Parse["4. Parse Quote"]
-        VerifySig["5. Verify signature"]
-        CheckMeasure["6. Check measurement"]
-        CheckTCB["7. Check TCB status"]
-        Decision["8. Accept / Reject"]
+        VerifySig["5. Verify Quote Signature"]
+        VerifyChain["6. Verify Certificate Chain"]
+        CheckTCB["7. Check TCB Status"]
+        CheckMeasure["8. Check Measurement"]
+        Decision["9. Accept / Reject"]
         
+        Input --> Parse
         Parse --> VerifySig
-        VerifySig --> CheckMeasure
-        CheckMeasure --> CheckTCB
-        CheckTCB --> Decision
+        VerifySig --> VerifyChain
+        VerifyChain --> CheckTCB
+        CheckTCB --> CheckMeasure
+        CheckMeasure --> Decision
     end
     
-    style AppEnclave fill:#3498db,color:#fff
+    QuoteOut --> Input
+    CollateralOut --> Input
+    
+    style App fill:#3498db,color:#fff
     style QE fill:#9b59b6,color:#fff
     style Decision fill:#27ae60,color:#fff
 ```
@@ -129,7 +138,7 @@ A quote alone isn't sufficient for verification. The verifier also needs **colla
 - **TCB information:** Current security level of the platform (microcode version, known vulnerabilities)
 - **Revocation data:** Certificates or platforms that have been revoked
 
-Intel's DCAP (Data Center Attestation Primitives) model provides this collateral through a Provisioning Certificate Caching Service (PCCS). On-chain systems like Automata's replicate this collateral on-chain for trustless access.
+[Intel Data Center Attestation Primitives (DCAP)](https://download.01.org/intel-sgx/sgx-dcap/) model provides this collateral through a Provisioning Certificate Caching Service (PCCS). On-chain systems like Automata's replicate this collateral on-chain for trustless access.
 
 ---
 
@@ -151,7 +160,7 @@ flowchart TD
     Layout --> Hash
     Attrs --> Hash
     
-    Hash["SHA-256 Hash\n(incremental during load)"]
+    Hash["SHA-256 Hash<br>(incremental during load)"]
     Hash --> MRENCLAVE["MRENCLAVE<br>256-bit measurement"]
     
     style MRENCLAVE fill:#27ae60,color:#fff
@@ -169,8 +178,8 @@ Any change-a single byte in the binary, a different compiler flag, a modified li
 
 | Measurement | What It Identifies | Use Case |
 |-------------|-------------------|----------|
-| **MRENCLAVE** | Exact code + config | "This specific build of this specific application" |
-| **MRSIGNER** | Signing key of enclave author | "Any enclave signed by this author" |
+| **[MRENCLAVE](https://download.01.org/intel-sgx/sgx-linux/2.19/docs/Intel_SGX_Developer_Reference_Linux_2.19_Open_Source.pdf)** | Exact code + config | "This specific build of this specific application" |
+| **[MRSIGNER](https://download.01.org/intel-sgx/sgx-linux/2.19/docs/)** | Signing key of enclave author | "Any enclave signed by this author" |
 
 **MRENCLAVE** is the stricter check. It changes with every rebuild unless builds are perfectly reproducible. Use it when you need to pin to an exact version.
 
@@ -186,7 +195,8 @@ For MRENCLAVE-based verification, anyone should be able to:
 
 If builds aren't reproducible, verifiers must trust whoever published the expected measurement. This undermines the "don't trust, verify" property that makes attestation valuable.
 
-Frameworks like Gramine, Occlum, and EGo provide tooling for reproducible enclave builds. For production deployments, reproducibility is not optional.
+Frameworks like
+[Gramine](https://gramineproject.io/), [Occlum](https://github.com/occlum/occlum), and [EGo](https://github.com/edgelesssys/ego) provide tooling for reproducible enclave builds. For production deployments, reproducibility is not optional.
 
 ---
 
@@ -201,7 +211,7 @@ flowchart TD
     subgraph Quote["ATTESTATION QUOTE"]
         Header["HEADER (48 bytes)<br>• Version<br>• Attestation Key Type<br>• QE Vendor ID"]
         
-        ReportBody["REPORT BODY (384 bytes)<br>• CPU SVN\n• Attributes (debug, mode)<br>• MRENCLAVE (256-bit)<br>• MRSIGNER (256-bit)\n• ISV Prod ID / SVN<br>• Report Data (64 bytes)"]
+        ReportBody["REPORT BODY (384 bytes)<br>• CPU SVN <br>• Attributes (debug, mode)<br>• MRENCLAVE (256-bit)<br>• MRSIGNER (256-bit)<br>• ISV Prod ID / SVN<br>• Report Data (64 bytes)"]
         
         Signature["SIGNATURE (variable)<br>• ECDSA over Header + Body<br>• QE Report (nested)<br>• Certification Data"]
     end
@@ -244,26 +254,50 @@ The ZK proof states: "I know a valid quote with these public measurements, signe
 
 Remote attestation is only as trustworthy as its root of trust. Understanding what you're trusting is essential.
 
+Attestation relies on secrets rooted in the CPU hardware. These secrets derive the attestation keys used to sign quotes.
+```mermaid
+flowchart TD
+    HW["Hardware Root Secret<br>(fused into CPU)<br>never exposed"]
+    
+    Derive["Derive Attestation Key"]
+    
+    AK["Attestation Key"]
+    
+    Quote["Attestation Quote"]
+    
+    HW --> Derive
+    Derive --> AK
+    AK -->|signs| Quote
+    
+    style HW fill:#e74c3c,color:#fff
+    style Quote fill:#27ae60,color:#fff
+```
+These two diagrams represent different layers of trust.
+
+The first diagram shows the hardware root of trust inside the CPU. Hardware secrets fused during manufacturing derive the attestation
+keys used to sign quotes.
+
+The second diagram shows the vendor PKI that allows a remote verifier to trust those attestation keys. The public key corresponding to the derived attestation key is certified through a vendor certificate chain anchored at the hardware vendor's root CA.
+
 ### The Trust Chain
 
 ```mermaid
 flowchart TD
-    HW["HARDWARE ROOT<br>(Fused into CPU)<br>Never exposed, never extracted"]
+    Root["Vendor Root CA<br>Intel SGX Root / AMD ARK"]
     
-    Root["VENDOR ROOT CA<br>Intel: SGX Root CA<br>AMD: ARK<br>Self-signed, published"]
+    Intermediate["Intermediate CA<br>Processor / Platform CA"]
     
-    Intermediate["INTERMEDIATE CA(s)<br>Intel: Platform/Processor CA<br>AMD: ASK"]
+    Platform["Platform Certificate<br>PCK (Intel) / VCEK (AMD)"]
     
-    Platform["PLATFORM CERTIFICATE<br>Intel: PCK (per-CPU, FMSPC/TCB)<br>AMD: VCEK"]
+    AK["Attestation Key"]
     
-    Quote["ATTESTATION QUOTE<br>Contains measurement, report data<br>This is what verifier receives"]
+    Quote["Attestation Quote"]
     
-    HW -->|derives| Root
     Root -->|signs| Intermediate
     Intermediate -->|signs| Platform
-    Platform -->|signs| Quote
+    Platform -->|certifies| AK
+    AK -->|signs| Quote
     
-    style HW fill:#e74c3c,color:#fff
     style Root fill:#9b59b6,color:#fff
     style Quote fill:#27ae60,color:#fff
 ```
@@ -279,7 +313,7 @@ When you verify an attestation, you implicitly trust:
 | **Microcode** | No bugs or backdoors in CPU firmware |
 | **Collateral source** | TCB info and revocation data are accurate and fresh |
 
-This is a significant trust surface. Hardware vulnerabilities (Spectre, Foreshadow, etc.) have repeatedly demonstrated that "hardware root of trust" doesn't mean "unconditionally secure." Attestation proves the enclave matches expectations *given current known vulnerabilities*-the TCB status encodes this.
+This is a significant trust surface. Hardware vulnerabilities (Spectre, Foreshadow, etc.) have repeatedly demonstrated that "hardware root of trust" doesn't mean "unconditionally secure." Attestation proves the enclave measurement and platform configuration match expectations given the currently accepted Trusted Computing Base (TCB) level.
 
 ### Minimizing Trust with ZK
 
@@ -342,6 +376,8 @@ flowchart LR
     G3 --> M3
     G4 --> M4
     G5 --> M5
+    
+    linkStyle default stroke:#333,stroke-width:2px
 ```
 
 This is the "Attestation Is Not Enough" thesis: attestation is necessary but not sufficient. It's a foundation, not a complete security architecture.
@@ -357,6 +393,7 @@ Moving attestation verification into a ZK circuit enables trustless on-chain ver
 ```mermaid
 flowchart TD
     subgraph Public["PUBLIC INPUTS"]
+        direction TB
         P1["expected_mrenclave (bytes32)"]
         P2["expected_report_data (bytes32)"]
         P3["vendor_root_pubkey (point)"]
@@ -364,12 +401,14 @@ flowchart TD
     end
     
     subgraph Private["PRIVATE INPUTS (Witness)"]
+        direction TB
         W1["quote_bytes"]
         W2["cert_chain[]"]
         W3["tcb_info + signature"]
     end
     
     subgraph Constraints["CIRCUIT CONSTRAINTS"]
+        direction TB
         C1["1. Parse quote"]
         C2["2. Verify measurement match"]
         C3["3. Parse cert chain"]
@@ -379,11 +418,26 @@ flowchart TD
         C7["7. Check freshness"]
     end
     
-    Public --> Constraints
-    Private --> Constraints
-    Constraints --> Output["proof : bytes"]
+    P1 --> C1
+    P2 --> C2
+    P3 --> C4
+    P4 --> C6
+    
+    W1 --> C1
+    W2 --> C3
+    W3 --> C6
+    
+    C1 --> Output["ZK Proof"]
+    C2 --> Output
+    C3 --> Output
+    C4 --> Output
+    C5 --> Output
+    C6 --> Output
+    C7 --> Output
     
     style Output fill:#27ae60,color:#fff
+    
+    linkStyle default stroke:#333,stroke-width:2px
 ```
 
 ### Constraint Breakdown
@@ -406,15 +460,15 @@ A full attestation verification circuit with one P-256 signature and two-certifi
 | PLONK | 60–120 seconds | ~500 bytes | ~300,000 |
 | STARK (via zkVM) | 2–5 minutes | ~50 KB | ~500,000 |
 
-Groth16 offers the best on-chain verification cost but requires a trusted setup per circuit. zkVMs like RISC Zero and SP1 allow general-purpose verification without circuit-specific setup, at the cost of larger proofs.
+[Groth16](https://eprint.iacr.org/2016/260) offers the best on-chain verification cost but requires a trusted setup per circuit. zkVMs like [RISC Zero](https://www.risczero.com/) and [SP1](https://github.com/succinctlabs/sp1) allow general-purpose verification without circuit-specific setup, at the cost of larger proofs.
 
 ### Practical Implementations
 
 **Automata + RISC Zero:** Run full DCAP verification logic in a RISC Zero guest program. The zkVM generates a proof that the verification passed. On-chain, verify only the RISC Zero proof.
 
-**zkemail ASN.1 circuits:** Circom circuits for parsing DER structures, extracting fields, and generating proofs. Still experimental but demonstrates feasibility.
+**[zkemail](https://github.com/zkemail) ASN.1 circuits:** Circom circuits for parsing DER structures, extracting fields, and generating proofs. Still experimental but demonstrates feasibility.
 
-**Rarimo ZK Passport:** Production circuits for verifying passport attestations (which use X.509 internally). Proves that P-256/RSA signature verification in ZK is viable.
+**[Rarimo](https://rarimo.com/) ZK Passport:** Production circuits for verifying passport attestations (which use X.509 internally). Proves that P-256/RSA signature verification in ZK is viable.
 
 ### ZK Design Considerations
 
@@ -443,10 +497,13 @@ flowchart TD
     Step2["2. VERIFY CERTIFICATE CHAIN<br>Parse DER certificates<br>Verify signatures to root<br>Check validity periods"]
     
     Step3["3. VERIFY QUOTE SIGNATURE<br>Use PCK public key<br>ECDSA over quote body"]
+
+    Step4["4. VERIFY QE CERTIFICATION<br>Check QE key against PCK certificate"]
     
-    Step4["4. VERIFY TCB STATUS<br>Parse TCBInfo<br>Match platform to levels<br>Check UpToDate/OutOfDate"]
     
-    Step5["5. APPLY POLICY<br>MRENCLAVE match?<br>Debug disabled?<br>TCB acceptable?\nReport data valid?"]
+    Step5["5. VERIFY TCB STATUS<br>Parse TCBInfo<br>Match platform to levels<br>Check UpToDate/OutOfDate"]
+    
+    Step6["6. APPLY POLICY<br>MRENCLAVE match?<br>Debug disabled?<br>TCB acceptable?<br>Report data valid?"]
     
     Output["OUTPUT<br>Accept / Reject + Reason"]
     
@@ -455,10 +512,13 @@ flowchart TD
     Step2 --> Step3
     Step3 --> Step4
     Step4 --> Step5
-    Step5 --> Output
+    Step5 --> Step6
+    Step6 --> Output
     
     style Input fill:#3498db,color:#fff
     style Output fill:#27ae60,color:#fff
+    
+    linkStyle default stroke:#333,stroke-width:2px
 ```
 
 ### Verification Approaches Compared
@@ -477,7 +537,7 @@ For blockchain applications, ZK verification increasingly represents the best tr
 
 ## Looking Ahead
 
-This post covered attestation concepts that apply across platforms. The model is consistent whether you're working with Intel SGX, AMD SEV-SNP, or other TEE implementations.
+This post covered attestation concepts that apply across platforms. The model is consistent whether you're working with Intel SGX, [AMD SEV-SNP](https://www.amd.com/en/developer/sev.html), or other TEE implementations.
 
 The next post dives into Intel DCAP specifically-the certificate hierarchy, FMSPC codes, TCB levels, and QE identity verification. These are the concrete details you need to implement or audit a DCAP-based system.
 
@@ -485,7 +545,6 @@ Later in the series, we will cover cross-platform differences (AMD SEV-SNP, AWS 
 
 ---
 
----
 
 **Previous:** [Part I - X.509 Verification On-Chain](01-x509-verification-on-chain.md)  
 **Next:** [Part III - Intel DCAP Certificate Hierarchy](03-intel-dcap-certificate-hierarchy.md)
