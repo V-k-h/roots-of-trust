@@ -4,7 +4,8 @@
 
 ---
 
-Trusted Execution Environments (TEEs) produce signed attestation quotes describing the identity and state of an enclave. That signature is validated against a certificate chain anchored to the hardware vendor's root CA. If you want trustless verification—no oracles, no multisigs, no "trust us"—you need to verify that chain on-chain.
+[Trusted Execution Environments (TEEs)](https://en.wikipedia.org/wiki/Trusted_execution_environment) produce signed attestation quotes describing the identity and state of an enclave. That signature is validated against a certificate chain anchored to the hardware vendor's root CA. If you want trustless verification—no oracles, no multisigs, no "trust us"—you need to verify that chain on-chain.
+
 
 While this post uses Intel's DCAP attestation model as a concrete example, the same verification challenges arise across modern TEE platforms including AMD SEV-SNP, AWS Nitro Enclaves, and ARM Confidential Compute Architecture.
 
@@ -44,11 +45,10 @@ To verify a quote, you must:
 4. Validate the QE attestation key against the platform's PCK certificate
 5. Validate the PCK certificate against the Processor CA
 6. Validate the Processor CA against the Intel Root CA
-7. Check certificate validity periods, revocation status, and [Trusted Computing Base (TCB)](https://download.01.org/intel-sgx/sgx-dcap/)
-   levels
+7. Check certificate validity periods, revocation status, and [Trusted Computing Base (TCB)](https://download.01.org/intel-sgx/sgx-dcap/) levels
 8. Compare the enclave measurement against expected values
 
-Steps 3–6 are X.509 operations. In a traditional system, libraries such as OpenSSL perform these checks in microseconds. On-chain, however, each operation has a cost—and some costs are prohibitive.
+Steps 4–6 are X.509 operations. In a traditional system, libraries such as OpenSSL perform these checks in microseconds. On-chain, however, each operation has a cost—and some costs are prohibitive.
 
 ---
 
@@ -64,7 +64,7 @@ Steps 3–6 are X.509 operations. In a traditional system, libraries such as Ope
 
 The EVM has no native support for any of this. Every byte comparison, every loop iteration, every memory operation costs gas. A typical X.509 certificate is 1–2 KB. Parsing it involves hundreds of operations.
 
-Automata Network's[DCAP Attestation library](https://github.com/automata-network/automata-dcap-attestation) includes Solidity DER decoders. They work—but they're expensive. Parsing a PCK certificate and extracting extensions can cost tens of thousands of gas before you even verify a signature.
+Automata Network's [DCAP Attestation library](https://github.com/automata-network/automata-dcap-attestation) includes Solidity DER decoders. They work—but they're expensive. Parsing a PCK certificate and extracting extensions can cost tens of thousands of gas before you even verify a signature.
 
 ### Signature Algorithms
 
@@ -94,9 +94,9 @@ flowchart LR
     style P256 fill:#e74c3c,color:#fff
 ```
 
-Until recently, verifying P-256 on-chain required implementing elliptic curve arithmetic in Solidity. This cost 300,000–500,000 gas per signature. [RIP-7212](https://github.com/ethereum/RIPs/blob/master/RIPS/rip-7212.md) introduces a P-256 precompile at address `0x100`, reducing verification to 3,450 gas—but it's only available on L2s that have adopted it (Polygon, Optimism, Arbitrum, zkSync). Ethereum mainnet has EIP-7951 pending, which addresses security issues in RIP-7212 and proposes 6,900 gas.
+Until recently, verifying P-256 on-chain required implementing elliptic curve arithmetic in Solidity. This cost 300,000–500,000 gas per signature. [RIP-7212](https://github.com/ethereum/RIPs/blob/master/RIPS/rip-7212.md) introduces a P-256 precompile at address `0x100`, reducing verification to 3,450 gas—but it's only available on L2s that have adopted it (Polygon, Optimism, Arbitrum, zkSync). [RIP-7212](https://github.com/ethereum/RIPs/blob/master/RIPS/rip-7212.md) introduces a P-256 precompile at address `0x100`, reducing verification to 3,450 gas—available on L2s that have adopted it (Polygon, Optimism, Arbitrum, zkSync). Ethereum mainnet has [EIP-7951](https://eips.ethereum.org/EIPS/eip-7951) (activated in Fusaka, December 2025) at 6,900 gas.
 
-**RSA verification** uses the modexp precompile ([EIP-198](https://eips.ethereum.org/EIPS/eip-198)). For small exponents (e=3 or e=65537), this is surprisingly cheap—a few hundred to a few thousand gas depending on key size. The expensive part is the padding verification and hash comparison, which must be done in Solidity.
+**RSA verification** uses the modexp precompile ([EIP-198](https://eips.ethereum.org/EIPS/eip-198)). For small exponents (e=3 or e=65537), this is surprisingly cheap—a few thousand gas depending on key size. The expensive part is the padding verification and hash comparison, which must be done in Solidity.
 
 ### Chain Traversal
 
@@ -117,6 +117,7 @@ A three-certificate chain with P-256 signatures costs roughly:
 | **Total** | **~80,000** | **~1,070,000** |
 
 Without P-256 precompiles, full on-chain verification is impractical for most applications.
+Given these constraints, several verification architectures have emerged in practice.
 
 ---
 
@@ -199,8 +200,10 @@ flowchart TD
         CheckSig --> Accept[Accept Quote]
     end
     
-    style OffChain fill:#f5f5f5
-    style OnChain fill:#e8f4e8
+    style OffChain fill:#e0e0e0,color:#000
+    style OnChain fill:#c8e6c9,color:#000
+    
+    linkStyle default stroke:#333,stroke-width:2px
 ```
 
 **Oracle-based:** A trusted party verifies attestations and signs the results. The contract trusts the oracle's signature.
@@ -251,18 +254,25 @@ function challengeAttestation(bytes32 quoteHash, bytes calldata fraudProof) exte
 
 ```mermaid
 flowchart LR
+
+    classDef offchain fill:#e0e0e0,color:#000,stroke:#999
+    classDef onchain fill:#c8e6c9,color:#000,stroke:#2e7d32
+
     subgraph OffChain["Off-Chain (Prover)"]
         Quote[Quote + Certs] --> Circuit[ZK Circuit]
         Circuit --> Proof[ZK Proof]
     end
-    
+
     subgraph OnChain["On-Chain"]
         Proof --> Verifier[Groth16 Verifier]
         Verifier --> Result["Valid/Invalid<br>~200k gas"]
     end
-    
-    style OffChain fill:#f5f5f5
-    style OnChain fill:#e8f4e8
+
+    class OffChain offchain
+    class OnChain onchain
+
+    linkStyle default stroke:#333,stroke-width:2px
+
 ```
 
 **The approach:**
@@ -286,7 +296,7 @@ flowchart LR
 | DER parsing (variable) | ~10,000–50,000 |
 | Full chain verification | ~1,500,000+ |
 
-Groth16 proof verification costs ~181,000 gas plus ~6,000 per public input—regardless of circuit size. For complex attestation verification, ZK can be cheaper than native Solidity.
+[Groth16](https://eprint.iacr.org/2016/260) proof verification costs roughly ~181,000 gas plus ~6,000 gas per public input, independent of circuit size. For complex attestation verification, ZK can be cheaper than native Solidity.
 
 **Tradeoffs:**
 
@@ -304,11 +314,12 @@ Groth16 proof verification costs ~181,000 gas plus ~6,000 per public input—reg
 
 | Project | Approach | Chain Support |
 |---------|----------|---------------|
-| Automata Network | Native Solidity + zkVM proofs | EVM chains, Solana |
-| Flashbots | Native (with Automata) | Ethereum |
-| Phala Network | Off-chain verification | Substrate |
-| Oasis Network | Consensus-based verification | Oasis |
-| Taiko | Native (with Automata) | Taiko L2 |
+| [Automata Network](https://github.com/automata-network/automata-dcap-attestation) | Native Solidity + zkVM proofs | EVM chains, Solana |
+| [Flashbots SUAVE](https://github.com/flashbots/suave-geth) | Native (with Automata) | Ethereum |
+| [Phala Network](https://github.com/Phala-Network/phala-blockchain) | Off-chain verification | Substrate |
+| [Oasis Network](https://github.com/oasisprotocol/oasis-core) | Consensus-based verification | Oasis |
+| [Taiko](https://github.com/taikoxyz/raiko) | Native (with Automata) | Taiko L2 |
+| [Puffer Finance](https://github.com/PufferFinance/rave) | Native (RAVe contracts) | Ethereum |
 
 Most production deployments today use Automata's DCAP library or a hybrid approach combining off-chain verification with on-chain commitments. Pure on-chain verification is becoming practical on L2s with RIP-7212, but remains expensive on mainnet.
 
@@ -320,13 +331,13 @@ The choice of verification approach depends on your constraints:
 
 ```mermaid
 flowchart TD
-    Start[Need Attestation Verification] --> Q1{Trustless required?}
+    Start[Need Attestation Verification] --> Q1{Need strong trust minimization?}
     
-    Q1 -->|Yes| Q2{L2 with RIP-7212?}
     Q1 -->|No| Oracle[Off-Chain + Oracle]
+    Q1 -->|Yes| Q2{L2 with RIP-7212?}
     
     Q2 -->|Yes| Native[Native On-Chain]
-    Q2 -->|No| Q3{Latency tolerant?}
+    Q2 -->|No| Q3{Prefer succinct proofs?}
     
     Q3 -->|Yes| ZK[ZK Proofs]
     Q3 -->|No| Optimistic[Optimistic + Fraud Proofs]
@@ -362,6 +373,5 @@ For now, the constraint is gas. Every approach trades off verification cost agai
 
 ---
 
----
 
 **Next:** [Part II — TEE Attestation Model](02-tee-attestation-model.md)
