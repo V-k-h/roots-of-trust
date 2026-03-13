@@ -4,7 +4,7 @@
 
 ---
 
-Theory meets production. Four projects have deployed TEE attestation in fundamentally different ways: Flashbots uses SGX to trustlessly replace centralized block builders. Taiko uses SGX as a fast prover alongside ZK for multi-proof security. Puffer uses SGX to prevent validator slashing. Scroll uses SGX as an independent verification layer for their zkEVM.
+Theory meets production. Four projects have deployed TEE attestation in fundamentally different ways: Flashbots uses [Intel SGX](https://www.intel.com/content/www/us/en/developer/tools/software-guard-extensions/overview.html) to trustlessly replace centralized block builders. Taiko uses SGX as a fast prover alongside ZK for multi-proof security. Puffer uses SGX to prevent validator slashing. Scroll uses SGX as an independent verification layer for their zkEVM.
 
 Each represents a distinct pattern for integrating attestation into blockchain infrastructure. This post examines their architectures, attestation flows, and the tradeoffs they've made.
 
@@ -12,7 +12,8 @@ Each represents a distinct pattern for integrating attestation into blockchain i
 
 ## Flashbots: TEE-Based Block Building (SUAVE)
 
-Flashbots is building SUAVE (Single Unified Auction for Value Expression)—a platform where MEV infrastructure runs inside TEEs instead of requiring trust in centralized operators.
+[Flashbots](https://www.flashbots.net/) is building [SUAVE](https://writings.flashbots.net/the-future-of-mev-is-suave) (Single Unified Auction for Value Expression)
+—a platform where MEV infrastructure runs inside TEEs instead of requiring trust in centralized operators.
 
 ### The Problem
 
@@ -21,8 +22,8 @@ Today's MEV supply chain requires trust:
 ```mermaid
 flowchart LR
     User[User] -->|tx| Searcher[Searcher]
-    Searcher -->|bundle| Builder["Builder\n(Trusted)"]
-    Builder -->|block| Relay["Relay\n(Trusted)"]
+    Searcher -->|bundle| Builder["Builder<br>(Trusted)"]
+    Builder -->|block| Relay["Relay<br>(Trusted)"]
     Relay -->|block| Proposer[Proposer]
     
     style Builder fill:#ff6b6b,color:#fff
@@ -38,7 +39,7 @@ SUAVE replaces trusted operators with TEE-based "Kettles":
 ```mermaid
 flowchart TD
     subgraph SUAVE_Chain["SUAVE Chain"]
-        SuApp["SuApp\n(Smart Contract)"]
+        SuApp["SuApp<br>(Smart Contract)"]
         Registry["Kettle Registry\n(Attestations)"]
     end
     
@@ -48,12 +49,12 @@ flowchart TD
         Secrets["Encrypted Storage"]
     end
     
-    User[User] -->|"Confidential\nCompute Request"| Kettle
-    Kettle -->|"Execute SuApp"| MEVM
+    User["User"] -->|"Confidential<br>compute request"| MEVM
     MEVM -->|"Access secrets"| Secrets
-    Kettle -->|"Result + Signature"| SUAVE_Chain
-    
-    Kettle -.->|"Remote Attestation"| Registry
+    KeyMgr --> MEVM
+    MEVM -->|"Execute SuApp logic"| SuApp
+    MEVM -->|"Result + Signature"| Registry
+    MEVM -->|"Remote Attestation"| Registry
 ```
 
 **Key components:**
@@ -196,7 +197,7 @@ flowchart TD
 
 ## Taiko: Multi-Prover with SGX Fast Path
 
-Taiko is a based rollup that uses SGX provers alongside ZK provers in a multi-proof architecture.
+[Taiko](https://taiko.xyz/) is a based rollup that uses SGX provers alongside ZK provers in a multi-proof architecture. Taiko separates witness generation from proof backends so that multiple proving systems can consume the same execution trace.
 
 ### The Multi-Prover Philosophy
 
@@ -204,20 +205,20 @@ Single-prover rollups have a critical vulnerability: one bug in the prover can c
 
 ```mermaid
 flowchart TD
-    Block[L2 Block] --> SGX_Prover["SGX Prover\n(Fast: seconds)"]
-    Block --> ZK_Prover["ZK Prover\n(Slow: minutes)"]
+    Block["L2 Block"] --> SGXProver["SGX Prover<br>(fast: seconds)"]
+    Block --> ZKProver["ZK Prover<br>(slow: minutes)"]
     
-    SGX_Prover --> SGX_Proof[SGX Proof]
-    ZK_Prover --> ZK_Proof[ZK Proof]
+    SGXProver --> SGXProof["SGX Proof"]
+    ZKProver --> ZKProof["ZK Proof"]
     
-    SGX_Proof --> Verifier[Multi-Proof Verifier]
-    ZK_Proof --> Verifier
+    SGXProof --> Verifier["Multi-Proof Verifier"]
+    ZKProof --> Verifier
     
-    Verifier -->|Both agree| Accept[Accept State Transition]
-    Verifier -->|Disagree| Dispute[Dispute Resolution]
+    Verifier -->|Both agree| Accept["Accept State Transition"]
+    Verifier -->|Disagree| Dispute["Dispute Resolution"]
     
-    style SGX_Prover fill:#4ecdc4,color:#fff
-    style ZK_Prover fill:#9b59b6,color:#fff
+    style SGXProver fill:#4ecdc4,color:#fff
+    style ZKProver fill:#9b59b6,color:#fff
 ```
 
 **Why both?**
@@ -231,7 +232,8 @@ Different failure modes mean an attacker would need to exploit *both* simultaneo
 
 ### Raiko Architecture
 
-Taiko's Raiko is a unified multi-prover framework:
+[Taiko's](https://taiko.xyz/)
+[Raiko](https://github.com/taikoxyz/raiko) is a unified multi-prover framework:
 
 ```mermaid
 flowchart LR
@@ -390,8 +392,7 @@ The dual-proof requirement means blocks need agreement from at least two indepen
 
 ## Puffer: Anti-Slashing with Secure-Signer
 
-Puffer takes a different approach: using SGX to protect Ethereum validators from slashing, not to prove rollup state transitions.
-
+[Puffer](https://www.puffer.fi/) takes a different approach: using SGX-backed secure signing to reduce slashing risk, especially from double-signing caused by operational failures. The key idea is to move validator signing policy and key custody inside an enclave boundary.
 ### The Slashing Problem
 
 Validators can be slashed for:
@@ -402,18 +403,24 @@ These often happen due to operational errors, not malice:
 
 ```mermaid
 flowchart TD
-    subgraph Normal["Normal Operation"]
-        Validator[Validator] -->|Sign| Block1[Block A at slot N]
+    subgraph Host["Host System (Untrusted)"]
+        Consensus["Consensus Client"]
+        Beacon["Beacon Node"]
     end
     
-    subgraph Slashable["Accidental Double-Sign"]
-        Validator2[Validator] -->|Sign| Block2A[Block A at slot N]
-        Validator2 -->|Sign| Block2B[Block B at slot N]
-        Block2A --> Slash[SLASHED]
-        Block2B --> Slash
+    subgraph Enclave["SGX Enclave (Trusted)"]
+        SecureSigner["Secure-Signer"]
+        ValidatorKey["Validator BLS Key<br>(encrypted at rest)"]
+        SlashDB["Slashing Protection DB"]
     end
     
-    style Slash fill:#ff6b6b,color:#fff
+    Beacon -->|"Block to sign"| Consensus
+    Consensus -->|"Sign request"| SecureSigner
+    SecureSigner -->|"Check"| SlashDB
+    SlashDB -->|"Safe?"| SecureSigner
+    SecureSigner -->|"Decrypt"| ValidatorKey
+    ValidatorKey -->|"Sign"| SecureSigner
+    SecureSigner -->|"Signature"| Consensus
 ```
 
 ### Secure-Signer Architecture
@@ -449,7 +456,7 @@ flowchart TD
 
 ### RAVe: Remote Attestation Verification
 
-Puffer's RAVe contracts verify that a node is running Secure-Signer:
+Puffer's [RAVe](https://github.com/PufferFinance/rave) contracts verify that a node is running Secure-Signer:
 
 ```mermaid
 sequenceDiagram
@@ -545,7 +552,7 @@ flowchart LR
 
 ## Scroll: TEE as Multi-Prover Layer
 
-Scroll integrates SGX as an independent verification layer alongside their zkEVM.
+[Scroll](https://scroll.io/) integrates SGX as an additional verification layer alongside its zkEVM. Rather than replacing zk proofs, Scroll uses SGX as an independent execution check over the same state transition.
 
 ### The Multi-Prover Rationale
 
@@ -575,29 +582,29 @@ flowchart TD
 
 ### Scroll's TEE Prover Architecture
 
-Developed with Automata Network:
+Developed with [Automata Network](https://github.com/automata-network/automata-dcap-attestation):
 
 ```mermaid
 flowchart TD
     subgraph L1["Ethereum L1"]
-        ScrollContract[Scroll Rollup Contract]
-        SGX_Verifier[SGX Verifier Contract]
-        DCAP[Automata DCAP Verifier]
+        ScrollContract["Scroll Rollup Contract"]
+        SGXVerifier["SGX Verifier Contract"]
+        DCAP["Automata DCAP Verifier"]
     end
     
-    subgraph Off_Chain["Off-Chain"]
-        Sequencer[Scroll Sequencer]
-        SGX_Prover["SGX Prover\n(Gramine + Geth)"]
+    subgraph OffChain["Off-Chain"]
+        Sequencer["Scroll Sequencer"]
+        SGXProver["SGX Prover<br>(Gramine + Geth)"]
+        Executor["Block Re-execution"]
     end
     
-    Sequencer -->|Commit batch| ScrollContract
-    Sequencer -->|Block data| SGX_Prover
+    Sequencer -->|"Commit batch"| ScrollContract
+    Sequencer -->|"Block data"| SGXProver
+    SGXProver --> Executor
+    Executor -->|"PoE + signature"| SGXVerifier
     
-    SGX_Prover -->|Re-execute in enclave| SGX_Prover
-    SGX_Prover -->|PoE + signature| SGX_Verifier
-    
-    SGX_Verifier -->|Verify signer| DCAP
-    SGX_Verifier -->|State valid| ScrollContract
+    DCAP -->|"Attestation check"| SGXVerifier
+    SGXVerifier -->|"State valid"| ScrollContract
 ```
 
 ### SGX Prover Components
@@ -608,6 +615,8 @@ flowchart TD
 | **Proof of Execution (PoE)** | Signed assertion: "post-state root is X" |
 | **Attestation** | DCAP quote proving SGX enclave authenticity |
 
+Initial DCAP attestation can cost on the order of millions of gas, while
+subsequent PoE verification reduces to a cheap signature check.
 ### Verification Flow
 
 ```solidity
@@ -674,6 +683,7 @@ This makes SGX proofs economically viable as an always-on second verification la
 ---
 
 ## Cross-Project Comparison
+Although the projects differ in goals, they converge on a common pattern: attestation is usually verified once at registration time, after which the enclave uses a cheaper signing key for repeated interaction.
 
 ### Attestation Patterns
 
@@ -690,28 +700,28 @@ All projects use "attest once, sign many" pattern: expensive attestation verific
 
 ```mermaid
 flowchart TD
-    subgraph Flashbots_Pattern["Flashbots: Execution Privacy"]
-        FB_User[User] -->|Encrypted tx| FB_TEE[SGX Kettle]
-        FB_TEE -->|Result| FB_Chain[SUAVE Chain]
+    subgraph FlashbotsPattern["Flashbots: Execution Privacy"]
+        FBUser["User"] -->|"Encrypted tx"| FBTEE["SGX Kettle"]
+        FBTEE -->|"Result"| FBChain["SUAVE Chain"]
     end
     
-    subgraph Taiko_Pattern["Taiko: Fast Finality"]
-        T_Block[L2 Block] --> T_TEE[SGX Prover]
-        T_Block --> T_ZK[ZK Prover]
-        T_TEE --> T_Verify[Multi-Verify]
-        T_ZK --> T_Verify
+    subgraph TaikoPattern["Taiko: Fast Finality"]
+        TBlock["L2 Block"] --> TTEE["SGX Prover"]
+        TBlock --> TZK["ZK Prover"]
+        TTEE --> TVerify["Multi-Proof Verification"]
+        TZK --> TVerify
     end
     
-    subgraph Puffer_Pattern["Puffer: Key Protection"]
-        P_Client[Consensus Client] --> P_TEE[Secure-Signer]
-        P_TEE -->|Protected signing| P_Beacon[Beacon Chain]
+    subgraph PufferPattern["Puffer: Key Protection"]
+        PClient["Consensus Client"] --> PTEE["Secure-Signer"]
+        PTEE -->|"Protected signing"| PBeacon["Beacon Chain"]
     end
     
-    subgraph Scroll_Pattern["Scroll: Independent Verification"]
-        S_Batch[Batch] --> S_ZK[zkEVM]
-        S_Batch --> S_TEE[SGX Prover]
-        S_ZK --> S_L1[L1]
-        S_TEE --> S_L1
+    subgraph ScrollPattern["Scroll: Independent Verification"]
+        SBatch["Batch"] --> SZK["zkEVM Prover"]
+        SBatch --> STEE["SGX Prover"]
+        SZK --> SL1["L1 Verification"]
+        STEE --> SL1
     end
 ```
 
@@ -856,8 +866,6 @@ Four projects, four patterns, one common foundation: Intel SGX attestation verif
 The infrastructure is maturing. Automata's DCAP library has become the de facto standard. The "attest once, sign many" pattern is universal. Multi-vendor support is coming.
 
 TEE attestation is no longer experimental—it's production infrastructure.
-
----
 
 ---
 
