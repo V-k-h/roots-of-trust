@@ -81,9 +81,9 @@ Remote attestation extends the trust proof to any external verifier—across net
 ```mermaid
 flowchart TD
     subgraph TEE_Platform["TEE Platform"]
-        AppEnclave["Application Enclave\nMRENCLAVE: 0xabc123..."]
-        QE["Quoting Enclave (QE)\nSigns with Attestation Key"]
-        PSE["Platform Services\nManages certificates"]
+        AppEnclave["Application Enclave<br>MRENCLAVE: 0xabc123..."]
+        QE["Quoting Enclave (QE)<br>Signs with Attestation Key"]
+        PSE["Platform Services<br>Manages certificates"]
         
         AppEnclave -->|"1. Report"| QE
         QE -->|"2. Quote"| PSE
@@ -142,9 +142,9 @@ A measurement is a cryptographic hash that uniquely identifies an enclave. It's 
 ```mermaid
 flowchart TD
     subgraph Inputs["Measurement Inputs"]
-        Binary["Enclave Binary\n(.so / .dll)"]
-        Layout["Initial Heap/Stack\nLayout"]
-        Attrs["Security Attributes\n(flags)"]
+        Binary["Enclave Binary<br>(.so / .dll)"]
+        Layout["Initial Heap/Stack<br>Layout"]
+        Attrs["Security Attributes<br>(flags)"]
     end
     
     Binary --> Hash
@@ -152,7 +152,7 @@ flowchart TD
     Attrs --> Hash
     
     Hash["SHA-256 Hash\n(incremental during load)"]
-    Hash --> MRENCLAVE["MRENCLAVE\n256-bit measurement"]
+    Hash --> MRENCLAVE["MRENCLAVE<br>256-bit measurement"]
     
     style MRENCLAVE fill:#27ae60,color:#fff
 ```
@@ -199,11 +199,11 @@ A quote is a structured blob containing everything a verifier needs (except coll
 ```mermaid
 flowchart TD
     subgraph Quote["ATTESTATION QUOTE"]
-        Header["HEADER (48 bytes)\n• Version\n• Attestation Key Type\n• QE Vendor ID"]
+        Header["HEADER (48 bytes)<br>• Version<br>• Attestation Key Type<br>• QE Vendor ID"]
         
-        ReportBody["REPORT BODY (384 bytes)\n• CPU SVN\n• Attributes (debug, mode)\n• MRENCLAVE (256-bit)\n• MRSIGNER (256-bit)\n• ISV Prod ID / SVN\n• Report Data (64 bytes)"]
+        ReportBody["REPORT BODY (384 bytes)<br>• CPU SVN\n• Attributes (debug, mode)<br>• MRENCLAVE (256-bit)<br>• MRSIGNER (256-bit)\n• ISV Prod ID / SVN<br>• Report Data (64 bytes)"]
         
-        Signature["SIGNATURE (variable)\n• ECDSA over Header + Body\n• QE Report (nested)\n• Certification Data"]
+        Signature["SIGNATURE (variable)<br>• ECDSA over Header + Body<br>• QE Report (nested)<br>• Certification Data"]
     end
     
     Header --> ReportBody
@@ -248,15 +248,15 @@ Remote attestation is only as trustworthy as its root of trust. Understanding wh
 
 ```mermaid
 flowchart TD
-    HW["HARDWARE ROOT\n(Fused into CPU)\nNever exposed, never extracted"]
+    HW["HARDWARE ROOT<br>(Fused into CPU)<br>Never exposed, never extracted"]
     
-    Root["VENDOR ROOT CA\nIntel: SGX Root CA\nAMD: ARK\nSelf-signed, published"]
+    Root["VENDOR ROOT CA<br>Intel: SGX Root CA<br>AMD: ARK<br>Self-signed, published"]
     
-    Intermediate["INTERMEDIATE CA(s)\nIntel: Platform/Processor CA\nAMD: ASK"]
+    Intermediate["INTERMEDIATE CA(s)<br>Intel: Platform/Processor CA<br>AMD: ASK"]
     
-    Platform["PLATFORM CERTIFICATE\nIntel: PCK (per-CPU, FMSPC/TCB)\nAMD: VCEK"]
+    Platform["PLATFORM CERTIFICATE<br>Intel: PCK (per-CPU, FMSPC/TCB)<br>AMD: VCEK"]
     
-    Quote["ATTESTATION QUOTE\nContains measurement, report data\nThis is what verifier receives"]
+    Quote["ATTESTATION QUOTE<br>Contains measurement, report data<br>This is what verifier receives"]
     
     HW -->|derives| Root
     Root -->|signs| Intermediate
@@ -436,19 +436,19 @@ Whether verification happens off-chain, on-chain, or in a ZK circuit, the logica
 
 ```mermaid
 flowchart TD
-    Input["INPUT\nQuote + Collateral"]
+    Input["INPUT<br>Quote + Collateral"]
     
-    Step1["1. PARSE QUOTE\nDecode header, body, signature\nExtract MRENCLAVE, report data"]
+    Step1["1. PARSE QUOTE<br>Decode header, body, signature<br>Extract MRENCLAVE, report data"]
     
-    Step2["2. VERIFY CERTIFICATE CHAIN\nParse DER certificates\nVerify signatures to root\nCheck validity periods"]
+    Step2["2. VERIFY CERTIFICATE CHAIN<br>Parse DER certificates<br>Verify signatures to root<br>Check validity periods"]
     
-    Step3["3. VERIFY QUOTE SIGNATURE\nUse PCK public key\nECDSA over quote body"]
+    Step3["3. VERIFY QUOTE SIGNATURE<br>Use PCK public key<br>ECDSA over quote body"]
     
-    Step4["4. VERIFY TCB STATUS\nParse TCBInfo\nMatch platform to levels\nCheck UpToDate/OutOfDate"]
+    Step4["4. VERIFY TCB STATUS<br>Parse TCBInfo<br>Match platform to levels<br>Check UpToDate/OutOfDate"]
     
-    Step5["5. APPLY POLICY\nMRENCLAVE match?\nDebug disabled?\nTCB acceptable?\nReport data valid?"]
+    Step5["5. APPLY POLICY<br>MRENCLAVE match?<br>Debug disabled?<br>TCB acceptable?\nReport data valid?"]
     
-    Output["OUTPUT\nAccept / Reject + Reason"]
+    Output["OUTPUT<br>Accept / Reject + Reason"]
     
     Input --> Step1
     Step1 --> Step2
@@ -481,7 +481,7 @@ This post covered attestation concepts that apply across platforms. The model is
 
 The next post dives into Intel DCAP specifically—the certificate hierarchy, FMSPC codes, TCB levels, and QE identity verification. These are the concrete details you need to implement or audit a DCAP-based system.
 
-Later in the series, we'll cover cross-platform differences (AMD SEV-SNP, AWS Nitro, ARM CCA) and how to build verification infrastructure that abstracts over them.
+Later in the series, we will cover cross-platform differences (AMD SEV-SNP, AWS Nitro, ARM CCA) and how to build verification infrastructure that abstracts over them.
 
 ---
 
