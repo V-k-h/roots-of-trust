@@ -48,8 +48,7 @@ Steps 2–5 are X.509 operations. In a traditional system, OpenSSL handles this 
 
 ### ASN.1/DER Parsing
 
-X.509 certificates are encoded in ASN.1 DER format—a tag-length-value encoding with variable-length fields and nested structures. Parsing DER requires:
-
+[X.509](https://en.wikipedia.org/wiki/X.509) certificates are encoded in [ASN.1 DER](https://en.wikipedia.org/wiki/X.690) format — a tag-length-value encoding with variable-length fields and nested structures. Parsing DER requires:
 - Reading tags and determining types
 - Handling multi-byte length encodings
 - Traversing nested SEQUENCE and SET structures
@@ -74,11 +73,11 @@ X.509 certificates in TEE attestation use standard algorithms:
 ```mermaid
 flowchart LR
     subgraph Ethereum["Ethereum Native"]
-        secp256k1["secp256k1\necrecover: 3,000 gas"]
+        secp256k1["secp256k1<br>ecrecover: 3,000 gas"]
     end
     
     subgraph TEE["TEE Attestation"]
-        P256["P-256 (secp256r1)\nPure Solidity: ~350k gas\nRIP-7212: 3,450 gas"]
+        P256["P-256 (secp256r1)<br>Pure Solidity: ~350k gas<br>RIP-7212: 3,450 gas"]
     end
     
     secp256k1 -.->|"Different curves"| P256
@@ -251,7 +250,7 @@ flowchart LR
     
     subgraph OnChain["On-Chain"]
         Proof --> Verifier[Groth16 Verifier]
-        Verifier --> Result["Valid/Invalid\n~200k gas"]
+        Verifier --> Result["Valid/Invalid<br>~200k gas"]
     end
     
     style OffChain fill:#f5f5f5
