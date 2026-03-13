@@ -16,9 +16,9 @@ A TEE attestation quote is cryptographically meaningless without its certificate
 
 ```mermaid
 flowchart TD
-    Root["Intel Root CA\n(hardcoded, trusted)"]
+    Root["Intel Root CA<br>(hardcoded, trusted)"]
     Platform["Platform CA Certificate"]
-    PCK["PCK Certificate\n(per-CPU, contains TCB info)"]
+    PCK["PCK Certificate<br>(per-CPU, contains TCB info)"]
     QE["Quoting Enclave Report"]
     Quote["Attestation Quote"]
     
