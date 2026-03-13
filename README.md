@@ -76,3 +76,7 @@ Content is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.
 ## Contributing
 
 Found an error or have a suggestion? Open an issue or submit a pull request.
+
+## Note
+
+Some editing, formatting, and diagram generation in this series were assisted by AI tools. All technical content and verification decisions were written and reviewed by the author.
