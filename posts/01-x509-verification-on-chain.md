@@ -4,28 +4,33 @@
 
 ---
 
-TEE attestation produces a signed quote. That signature is validated against a certificate chain anchored to the hardware vendor's root CA. If you want trustless verification—no oracles, no multisigs, no "trust us"—you need to verify that chain on-chain.
+Trusted Execution Environments (TEEs) produce signed attestation quotes describing the identity and state of an enclave. That signature is validated against a certificate chain anchored to the hardware vendor's root CA. If you want trustless verification—no oracles, no multisigs, no "trust us"—you need to verify that chain on-chain.
 
-This is harder than it sounds. X.509 was designed for browsers and operating systems with gigabytes of memory and milliseconds to spare. The EVM gives you 30 million gas per block and charges you for every byte. This post explores the constraints, the approaches, and the tradeoffs for bringing X.509 verification into blockchain infrastructure.
+While this post uses Intel's DCAP attestation model as a concrete example, the same verification challenges arise across modern TEE platforms including AMD SEV-SNP, AWS Nitro Enclaves, and ARM Confidential Compute Architecture.
+
+This is harder than it sounds. The X.509 certificate infrastructure was designed for browsers and operating systems with gigabytes of memory and milliseconds to spare. The EVM gives you 30 million gas per block and charges you for every byte. This post explores the constraints, the approaches, and the tradeoffs for bringing X.509 verification into blockchain infrastructure.
 
 ---
 
 ## The Problem
 
-A TEE attestation quote is cryptographically meaningless without its certificate chain. Consider Intel DCAP attestation:
+A TEE attestation quote is cryptographically meaningless without its certificate chain. TEE platforms typically anchor attestation in a hardware vendor root
+certificate. As a concrete example, consider Intel's [Data Center Attestation Primitives (DCAP)](https://download.01.org/intel-sgx/sgx-dcap/) model:
 
 ```mermaid
 flowchart TD
-    Root["Intel Root CA<br>(hardcoded, trusted)"]
-    Platform["Platform CA Certificate"]
-    PCK["PCK Certificate<br>(per-CPU, contains TCB info)"]
-    QE["Quoting Enclave Report"]
+    Root["Intel SGX Root CA<br>(hardcoded trust anchor)"]
+    ProcCA["Processor CA Certificate"]
+    PCK["PCK Certificate<br>(platform-specific, includes TCB extensions)"]
+    QE["Quoting Enclave<br>(produces quote)"]
+    AK["QE Attestation Key"]
     Quote["Attestation Quote"]
     
-    Root -->|signs| Platform
-    Platform -->|signs| PCK
-    PCK -->|signs| QE
-    QE -->|signs| Quote
+    Root -->|signs| ProcCA
+    ProcCA -->|signs| PCK
+    PCK -->|certifies| AK
+    QE -->|uses| AK
+    AK -->|signs| Quote
     
     style Root fill:#3498db,color:#fff
     style Quote fill:#27ae60,color:#fff
@@ -34,13 +39,16 @@ flowchart TD
 To verify a quote, you must:
 
 1. Parse the quote structure to extract the signature and signed data
-2. Verify the signature using the PCK certificate's public key
-3. Validate the PCK certificate against the Platform CA
-4. Validate the Platform CA against the Intel Root CA
-5. Check certificate validity periods, revocation status, and TCB levels
-6. Compare the enclave measurement against expected values
+2. Extract the Quoting Enclave (QE) attestation key used to sign the quote
+3. Verify the quote signature using the QE attestation key
+4. Validate the QE attestation key against the platform's PCK certificate
+5. Validate the PCK certificate against the Processor CA
+6. Validate the Processor CA against the Intel Root CA
+7. Check certificate validity periods, revocation status, and [Trusted Computing Base (TCB)](https://download.01.org/intel-sgx/sgx-dcap/)
+   levels
+8. Compare the enclave measurement against expected values
 
-Steps 2–5 are X.509 operations. In a traditional system, OpenSSL handles this in microseconds. On-chain, each step has a cost—and some costs are prohibitive.
+Steps 3–6 are X.509 operations. In a traditional system, libraries such as OpenSSL perform these checks in microseconds. On-chain, however, each operation has a cost—and some costs are prohibitive.
 
 ---
 
@@ -56,7 +64,7 @@ Steps 2–5 are X.509 operations. In a traditional system, OpenSSL handles this 
 
 The EVM has no native support for any of this. Every byte comparison, every loop iteration, every memory operation costs gas. A typical X.509 certificate is 1–2 KB. Parsing it involves hundreds of operations.
 
-Automata Network's on-chain PCCS includes Solidity DER decoders. They work—but they're expensive. Parsing a PCK certificate and extracting extensions can cost tens of thousands of gas before you even verify a signature.
+Automata Network's[DCAP Attestation library](https://github.com/automata-network/automata-dcap-attestation) includes Solidity DER decoders. They work—but they're expensive. Parsing a PCK certificate and extracting extensions can cost tens of thousands of gas before you even verify a signature.
 
 ### Signature Algorithms
 
@@ -86,9 +94,9 @@ flowchart LR
     style P256 fill:#e74c3c,color:#fff
 ```
 
-Until recently, verifying P-256 on-chain required implementing elliptic curve arithmetic in Solidity. This cost 300,000–500,000 gas per signature. RIP-7212 introduces a P-256 precompile at address `0x100`, reducing verification to 3,450 gas—but it's only available on L2s that have adopted it (Polygon, Optimism, Arbitrum, zkSync). Ethereum mainnet has EIP-7951 pending, which addresses security issues in RIP-7212 and proposes 6,900 gas.
+Until recently, verifying P-256 on-chain required implementing elliptic curve arithmetic in Solidity. This cost 300,000–500,000 gas per signature. [RIP-7212](https://github.com/ethereum/RIPs/blob/master/RIPS/rip-7212.md) introduces a P-256 precompile at address `0x100`, reducing verification to 3,450 gas—but it's only available on L2s that have adopted it (Polygon, Optimism, Arbitrum, zkSync). Ethereum mainnet has EIP-7951 pending, which addresses security issues in RIP-7212 and proposes 6,900 gas.
 
-**RSA verification** uses the modexp precompile (EIP-198). For small exponents (e=3 or e=65537), this is surprisingly cheap—a few hundred to a few thousand gas depending on key size. The expensive part is the padding verification and hash comparison, which must be done in Solidity.
+**RSA verification** uses the modexp precompile ([EIP-198](https://eips.ethereum.org/EIPS/eip-198)). For small exponents (e=3 or e=65537), this is surprisingly cheap—a few hundred to a few thousand gas depending on key size. The expensive part is the padding verification and hash comparison, which must be done in Solidity.
 
 ### Chain Traversal
 
