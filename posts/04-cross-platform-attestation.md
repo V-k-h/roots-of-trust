@@ -4,9 +4,16 @@
 
 ---
 
-The TEE landscape is fragmented. Intel SGX/TDX, AMD SEV-SNP, AWS Nitro, ARM CCA—each platform has its own attestation format, certificate hierarchy, and cryptographic choices. Building verification infrastructure that works across platforms requires understanding these differences.
+The TEE landscape is fragmented. 
+[Intel SGX](https://www.intel.com/content/www/us/en/developer/tools/software-guard-extensions/overview.html) /
+[Intel TDX](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-trust-domain-extensions.html),
+[AMD SEV-SNP](https://www.amd.com/en/developer/sev.html),
+[AWS Nitro Enclaves](https://docs.aws.amazon.com/enclaves/latest/user/nitro-enclave.html),
+and
+[ARM Confidential Compute Architecture (CCA)](https://www.arm.com/architecture/security-features/arm-confidential-compute-architecture)
+each have their own attestation format, certificate hierarchy, and cryptographic choices.Building verification infrastructure that works across platforms requires understanding these differences.
 
-This post examines the three major alternatives to Intel DCAP: AMD SEV-SNP, AWS Nitro Enclaves, and ARM CCA. For each, we cover the trust model, certificate structure, attestation format, and on-chain verification feasibility. The goal is a clear map of what works, what doesn't, and where the gaps are.
+This post examines the three major alternatives to [Intel Data Center Attestation Primitives (DCAP)](https://download.01.org/intel-sgx/sgx-dcap/): AMD SEV-SNP, AWS Nitro Enclaves, and ARM CCA. For each, we cover the trust model, certificate structure, attestation format, and on-chain verification feasibility. The goal is a clear map of what works, what doesn't, and where the gaps are.
 
 ---
 
@@ -41,12 +48,12 @@ AMD's Secure Encrypted Virtualization - Secure Nested Paging (SEV-SNP) provides 
 ```mermaid
 flowchart TD
     subgraph Hypervisor["HYPERVISOR (Untrusted)"]
-        VM1["Guest VM (SNP)\nEncrypted Memory"]
-        VM2["Guest VM (SNP)\nEncrypted Memory"]
-        VM3["Guest VM (Normal)\nPlaintext Memory"]
+        VM1["Guest VM (SNP)<br>Encrypted Memory"]
+        VM2["Guest VM (SNP)<br>Encrypted Memory"]
+        VM3["Guest VM (Normal)<br>Plaintext Memory"]
     end
     
-    SP["AMD SECURE PROCESSOR (SP)\n• Manages encryption keys per VM\n• Handles attestation requests\n• Signs reports with VCEK\n• Enforces SNP memory integrity"]
+    SP["AMD SECURE PROCESSOR (SP)<br>• Manages encryption keys per VM<br>• Handles attestation requests<br>• Signs reports with VCEK<br>• Enforces SNP memory integrity"]
     
     VM1 --> SP
     VM2 --> SP
@@ -62,21 +69,23 @@ AMD uses a simpler three-certificate chain compared to Intel:
 
 ```mermaid
 flowchart TD
-    ARK["AMD ROOT KEY (ARK)\n• ECDSA P-384\n• Self-signed\n• One per CPU product line"]
+    ARK["AMD Root Key (ARK)<br>• ECDSA P-384<br>• Self-signed root CA<br>• One per CPU product line"]
     
-    ASK["AMD SEV KEY (ASK)\n• ECDSA P-384\n• Intermediate CA\n• One per product line"]
+    ASK["AMD SEV Key (ASK)<br>• ECDSA P-384<br>• Intermediate CA<br>• One per CPU product line"]
     
-    VCEK["VCEK\n(Versioned Chip Endorsement Key)\n• ECDSA P-384\n• Unique per CPU + TCB version\n• Retrieved from AMD KDS"]
+    VCEK["Versioned Chip Endorsement Key (VCEK)<br>• ECDSA P-384<br>• Unique per CPU + TCB version<br>• Retrieved from AMD KDS"]
     
-    Report["ATTESTATION REPORT\n• Signed by VCEK\n• Contains measurement, policy"]
+    Report["Attestation Report<br>• Signed by VCEK<br>• Contains measurement and policy"]
     
     ARK -->|signs| ASK
     ASK -->|signs| VCEK
     VCEK -->|signs| Report
     
     style ARK fill:#e74c3c,color:#fff
+    style ASK fill:#e67e22,color:#fff
     style VCEK fill:#9b59b6,color:#fff
     style Report fill:#27ae60,color:#fff
+
 ```
 
 ### VCEK Certificate Extensions
@@ -99,16 +108,17 @@ The SNP attestation report is a fixed 1184-byte structure:
 ```mermaid
 flowchart TD
     subgraph Report["SNP ATTESTATION REPORT (1184 bytes)"]
-        Header["Header (0x000-0x050)\n• Version (must be 2)\n• Guest SVN, Policy\n• Family ID, Image ID\n• VMPL, Sig Algorithm\n• Current TCB, Platform Info"]
+        Header["Header (0x000–0x050)<br>• Version (must be 2)<br>• Guest SVN, policy<br>• Family ID, image ID<br>• VMPL, sig algorithm<br>• Current TCB, platform info"]
         
-        Measurement["Measurement (0x050-0x1B0)\n• Report Data (48 bytes)\n• Measurement (48 bytes, SHA-384)\n• Host Data, ID Key Digest\n• Author Key Digest\n• Report ID, Chip ID"]
+        Measurement["Measurement (0x050–0x1B0)<br>• Report data (48 bytes)<br>• Measurement (48 bytes, SHA-384)<br>• Host data, ID key digest<br>• Author key digest<br>• Report ID, chip ID"]
         
-        TCB["TCB Info (0x1B0-0x210)\n• Committed TCB\n• Current/Launch TCB\n• Reserved"]
+        TCB["TCB info (0x1B0–0x210)<br>• Committed TCB<br>• Current/launch TCB<br>• Reserved"]
         
-        Signature["Signature (0x2B0-0x4B0)\n• ECDSA P-384 (512 bytes)\n• R || S format"]
+        Signature["Signature (0x2B0–0x4B0)<br>• ECDSA P-384 (512 bytes)<br>• R || S format"]
     end
     
     Header --> Measurement --> TCB --> Signature
+
 ```
 
 ### The P-384 Challenge
@@ -127,20 +137,27 @@ AMD's use of P-384 (secp384r1) creates significant challenges for on-chain verif
 Given the P-384 constraint, practical approaches:
 
 ```mermaid
+
 flowchart LR
     subgraph ZK["Option 1: ZK Proof"]
-        Report1[SNP Report] --> ZKCircuit[ZK Circuit]
-        ZKCircuit --> Proof[Proof ~200k gas]
+        Report1["SNP Attestation Report"]
+        ZKCircuit["ZK Circuit Verification"]
+        Proof["On-chain proof verification<br>~200k gas"]
+
+        Report1 --> ZKCircuit --> Proof
     end
     
     subgraph Oracle["Option 2: Threshold Oracle"]
-        Report2[SNP Report] --> Oracles[Oracle Committee]
-        Oracles --> Threshold[k-of-n Signatures]
-        Threshold --> Accept[Accept ~25k gas]
+        Report2["SNP Attestation Report"]
+        Oracles["Oracle committee"]
+        Threshold["k-of-n signatures"]
+        Accept["On-chain signature check<br>~25k gas"]
+
+        Report2 --> Oracles --> Threshold --> Accept
     end
     
-    style ZK fill:#9b59b6,color:#fff
-    style Oracle fill:#f39c12,color:#fff
+    style ZK fill:#9b59b6,color:#fff,stroke:#333,stroke-width:1px
+    style Oracle fill:#f39c12,color:#fff,stroke:#333,stroke-width:1px
 ```
 
 ---
@@ -153,22 +170,17 @@ AWS Nitro Enclaves provide isolation on AWS infrastructure—but with a fundamen
 
 ```mermaid
 flowchart LR
-    subgraph Silicon["Intel/AMD (Silicon Root)"]
-        Q1[Quote] --> PCK1[PCK/VCEK]
-        PCK1 --> Int1[Intermediate]
-        Int1 --> Root1["Vendor Root\n(Silicon-fused)"]
-        Root1 --> Trust1["Can't forge"]
-    end
-    
-    subgraph AWS["AWS Nitro (HSM Root)"]
-        Q2[Attestation] --> Cert2[Enclave Cert]
-        Cert2 --> Int2[Intermediate]
-        Int2 --> Root2["AWS Root CA\n(AWS HSM)"]
-        Root2 --> Trust2["AWS could forge"]
-    end
-    
-    style Root1 fill:#27ae60,color:#fff
-    style Root2 fill:#f39c12,color:#fff
+    Intel["Intel SGX/TDX<br>Silicon root<br>(cannot forge)"]
+    AMD["AMD SEV-SNP<br>Silicon root<br>(cannot forge)"]
+    ARM["ARM CCA<br>Silicon root<br>(cannot forge)"]
+    AWS["AWS Nitro<br>AWS HSM root<br>(AWS could forge)"]
+
+    Intel --> AMD --> ARM --> AWS
+
+    style Intel fill:#27ae60,color:#fff
+    style AMD fill:#27ae60,color:#fff
+    style ARM fill:#27ae60,color:#fff
+    style AWS fill:#f39c12,color:#fff
 ```
 
 ### Nitro Architecture
@@ -176,18 +188,19 @@ flowchart LR
 ```mermaid
 flowchart TD
     subgraph EC2["EC2 Instance"]
-        Parent["Parent Instance\n• Runs main app\n• Has network/storage"]
-        Enclave["Nitro Enclave\n• Isolated vCPUs\n• Isolated memory\n• No network/storage"]
+        Parent["Parent instance<br>• Runs main app<br>• Has network/storage"]
+        Enclave["Nitro Enclave<br>• Isolated vCPUs<br>• Isolated memory<br>• No network/storage"]
         
         Parent <-->|vsock| Enclave
     end
     
-    NSM["NITRO SECURITY MODULE (NSM)\n• Hardware on Nitro card\n• Generates attestation docs\n• Signs with AWS-rooted key\n• Provides RNG"]
+    NSM["Nitro Security Module (NSM)<br>• Hardware on Nitro card<br>• Generates attestation docs<br>• Signs with AWS-rooted key<br>• Provides RNG"]
     
     Enclave --> NSM
     
     style Enclave fill:#3498db,color:#fff
     style NSM fill:#9b59b6,color:#fff
+
 ```
 
 ### PCR-Based Measurements
@@ -205,20 +218,26 @@ Nitro uses Platform Configuration Registers (PCRs) instead of a single measureme
 
 ### Attestation Document Format
 
-Nitro attestations use COSE Sign1 (CBOR Object Signing and Encryption):
+Nitro attestations use [COSE Sign1](https://datatracker.ietf.org/doc/html/rfc8152) (CBOR Object Signing and Encryption):
 
 ```mermaid
 flowchart TD
     subgraph COSE["COSE_Sign1 Structure"]
-        Protected["protected:\n• alg: ES384 (P-384)"]
+        Protected["protected<br>• alg: ES384 (P-384)"]
         
-        Payload["payload:\n• module_id\n• timestamp, digest\n• pcrs: {0: bytes48, 1: bytes48, ...}\n• certificate (DER X.509)\n• cabundle (CA chain)\n• public_key (optional)\n• user_data, nonce"]
+        Payload["payload<br>• module_id<br>• timestamp, digest<br>• pcrs: {0: bytes48, 1: bytes48, ...}<br>• certificate (DER X.509)<br>• cabundle (CA chain)<br>• public_key (optional)<br>• user_data, nonce"]
         
-        Signature["signature:\n• 96 bytes (P-384)"]
+        Signature["signature<br>• 96 bytes (ECDSA P-384)"]
     end
     
-    Protected --> Payload --> Signature
+    Protected -.included in signing.- Signature
+    Payload -.included in signing.- Signature
 ```
+Nitro attestation documents are encoded as
+[COSE Sign1](https://datatracker.ietf.org/doc/html/rfc9052) objects,
+where the signature covers the protected headers and payload.
+The payload itself is a [CBOR](https://datatracker.ietf.org/doc/html/rfc8949)
+structure containing PCR measurements, metadata, and certificate material.
 
 ### Trust Implications
 
@@ -235,14 +254,21 @@ Nitro is appropriate when:
 - Convenience outweighs trust minimization
 
 ---
-
 ## ARM Confidential Compute Architecture (CCA)
 
-ARM CCA is the newest entrant—designed for mobile and edge devices with increasing data center adoption.
+[ARM Confidential Compute Architecture (CCA)](https://developer.arm.com/documentation/den0125/latest)
+is the newest entrant—designed for mobile and edge devices with increasing data center adoption.
 
+CCA introduces a new execution environment called a **Realm**.
+Realms are isolated virtual machines whose memory and execution state
+are protected from the host operating system and hypervisor. They are
+managed by a privileged component called the
+[Realm Management Monitor (RMM)](https://developer.arm.com/documentation/den0137/latest),
+which runs at EL2 and enforces isolation between the host and Realm worlds.
 ### Architecture Overview
 
 ```mermaid
+
 flowchart TD
     subgraph Normal["NORMAL WORLD"]
         HostOS["Host OS (Linux)"]
@@ -250,16 +276,19 @@ flowchart TD
     end
     
     subgraph Realm["REALM WORLD"]
-        R1["Realm 1 (VM)\nIsolated from host"]
-        R2["Realm 2 (VM)\nIsolated from host"]
-        R3["Realm 3 (VM)\nIsolated from host"]
+        R1["Realm 1 (VM)<br>Isolated from host"]
+        R2["Realm 2 (VM)<br>Isolated from host"]
+        R3["Realm 3 (VM)<br>Isolated from host"]
     end
     
-    RMM["REALM MANAGEMENT MONITOR (RMM)\n• Manages Realm lifecycle\n• Handles memory encryption\n• Generates attestation tokens\n• Runs at EL2 (isolated)"]
+    RMM["Realm Management Monitor (RMM)<br>• Manages Realm lifecycle<br>• Mediates host/realm transitions<br>• Handles memory protection<br>• Runs at EL2"]
     
-    RootOfTrust["ARM ROOT OF TRUST\n• Hardware-backed keys\n• Platform attestation"]
+    RootOfTrust["Platform Root of Trust<br>• Hardware-backed keys<br>• Platform attestation"]
     
-    Realm --> RMM
+    RMM --> R1
+    RMM --> R2
+    RMM --> R3
+    
     RMM --> RootOfTrust
     
     style RMM fill:#9b59b6,color:#fff
@@ -268,17 +297,18 @@ flowchart TD
 
 ### CCA Attestation Token
 
-CCA uses Entity Attestation Tokens (EAT) in CBOR format:
+CCA uses Entity Attestation Tokens (EAT) in [CBOR](https://datatracker.ietf.org/doc/html/rfc8949) format:
 
 ```mermaid
 flowchart TD
     subgraph CCAToken["CCA_TOKEN"]
-        Platform["CCA_PLATFORM_TOKEN (COSE_Sign1)\n• profile, challenge\n• implementation_id\n• instance_id, config\n• lifecycle state\n• sw_components[]\n• platform_hash_algo"]
+        Platform["CCA_PLATFORM_TOKEN (COSE_Sign1)<br>• profile, challenge<br>• implementation_id<br>• instance_id, config<br>• lifecycle state<br>• sw_components[]<br>• platform_hash_algo"]
         
-        Realm["CCA_REALM_TOKEN (COSE_Sign1)\n• challenge\n• realm_initial_measurement (RIM)\n• realm_extensible_measurements (REMs)\n• realm_personalization_value\n• realm_public_key"]
+        Realm["CCA_REALM_TOKEN (COSE_Sign1)<br>• challenge<br>• realm_initial_measurement (RIM)<br>• realm_extensible_measurements (REMs)<br>• realm_personalization_value<br>• realm_public_key"]
     end
     
     Platform --> Realm
+
 ```
 
 ### On-Chain Status
@@ -400,22 +430,23 @@ Since ZK is the practical path for non-Intel platforms, design around it:
 ```mermaid
 flowchart TD
     subgraph Platforms["Platform-Specific"]
-        Intel[Intel Quote] --> IntelCircuit[Intel ZK Circuit]
-        AMD[AMD Report] --> AMDCircuit[AMD ZK Circuit]
-        AWS[Nitro Doc] --> AWSCircuit[AWS ZK Circuit]
+        Intel["Intel Quote"] --> IntelCircuit["Intel ZK Circuit"]
+        AMD["AMD Report"] --> AMDCircuit["AMD ZK Circuit"]
+        AWS["Nitro Doc"] --> AWSCircuit["AWS ZK Circuit"]
     end
     
     subgraph Unified["Unified Interface"]
-        IntelCircuit --> Proof[Normalized Proof]
+        IntelCircuit --> Proof["Normalized Proof"]
         AMDCircuit --> Proof
         AWSCircuit --> Proof
         
-        Proof --> Verifier[Multi-Platform Verifier]
-        Verifier --> Result["AttestationResult\n• platform\n• measurementHash\n• reportDataHash"]
+        Proof --> Verifier["Multi-Platform Verifier"]
+        Verifier --> Result["AttestationResult<br>• platform<br>• measurementHash<br>• reportDataHash"]
     end
     
     style Verifier fill:#9b59b6,color:#fff
     style Result fill:#27ae60,color:#fff
+
 ```
 
 ---
@@ -441,7 +472,6 @@ Cross-platform attestation is becoming critical as the TEE landscape matures:
 
 The practical advice: design for abstraction. Use ZK verification where possible, build platform-agnostic interfaces, and prepare for a multi-vendor future.
 
----
 
 ---
 
