@@ -6,9 +6,9 @@
 
 Attestation is the mechanism by which a TEE proves its identity to an external party. It answers a deceptively simple question: *Is this specific code running on genuine hardware in a secure configuration?*
 
-The answer takes the form of a cryptographic proof—a signed statement that binds a measurement (hash of the enclave) to a hardware-rooted key. This proof is non-interactive: the verifier doesn't need to communicate with the enclave during verification. They receive a blob, validate it against known-good values, and decide whether to trust the enclave's outputs.
+The answer takes the form of a cryptographic proof-a signed statement that binds a measurement (hash of the enclave) to a hardware-rooted key. This proof is non-interactive: the verifier doesn't need to communicate with the enclave during verification. They receive a blob, validate it against known-good values, and decide whether to trust the enclave's outputs.
 
-This post covers the attestation model independent of any specific platform. We'll examine local and remote attestation, how measurements establish identity, what the resulting quote contains, and how verification works—including how attestation maps to ZK circuits for on-chain verification.
+This post covers the attestation model independent of any specific platform. We will examine local and remote attestation, how measurements establish identity, what the resulting quote contains, and how verification works-including how attestation maps to ZK circuits for on-chain verification.
 
 ---
 
@@ -16,7 +16,7 @@ This post covers the attestation model independent of any specific platform. We'
 
 At its core, attestation solves a remote trust problem.
 
-When you connect to a server over HTTPS, you trust the certificate chain anchored to a CA in your browser's root store. But that certificate only proves the server controls a domain—it says nothing about what software is running or whether the server operator can read your data.
+When you connect to a server over HTTPS, you trust the certificate chain anchored to a CA in your browser's root store. But that certificate only proves the server controls a domain-it says nothing about what software is running or whether the server operator can read your data.
 
 TEE attestation goes further. It proves:
 
@@ -24,7 +24,7 @@ TEE attestation goes further. It proves:
 2. **Hardware authenticity:** The CPU is genuine, manufactured by the claimed vendor
 3. **Configuration integrity:** Security-relevant settings (debug mode, memory encryption) are in the expected state
 
-The proof is rooted in hardware. A key burned into the CPU during manufacturing signs the attestation. No software—not the OS, not the hypervisor, not even the enclave itself—can forge this signature.
+The proof is rooted in hardware. A key burned into the CPU during manufacturing signs the attestation. No software-not the OS, not the hypervisor, not even the enclave itself-can forge this signature.
 
 ---
 
@@ -58,7 +58,7 @@ sequenceDiagram
 - User-defined data (the challenge, a public key, application data)
 - A MAC (Message Authentication Code) computed using a CPU-derived report key
 
-**Step 3:** Enclave A verifies the MAC using the same report key. This key is derived deterministically from hardware secrets and the target enclave's identity—only the genuine CPU can produce it, and only Enclave A can verify MACs targeted to itself.
+**Step 3:** Enclave A verifies the MAC using the same report key. This key is derived deterministically from hardware secrets and the target enclave's identity-only the genuine CPU can produce it, and only Enclave A can verify MACs targeted to itself.
 
 ### Why Local Attestation Matters
 
@@ -74,7 +74,7 @@ Local attestation is fast (no network round-trips) and private (no external part
 
 ## Remote Attestation
 
-Remote attestation extends the trust proof to any external verifier—across networks, organizations, or even on-chain.
+Remote attestation extends the trust proof to any external verifier-across networks, organizations, or even on-chain.
 
 ### The Flow
 
@@ -111,7 +111,7 @@ flowchart TD
 
 ### Report vs Quote
 
-The **report** is a local structure—it contains a MAC that only the same CPU can verify. It cannot be validated by an external party.
+The **report** is a local structure-it contains a MAC that only the same CPU can verify. It cannot be validated by an external party.
 
 The **quote** transforms the report into a portable proof. A special enclave called the **Quoting Enclave (QE)** performs this transformation:
 
@@ -135,7 +135,7 @@ Intel's DCAP (Data Center Attestation Primitives) model provides this collateral
 
 ## Measurements and Identity
 
-A measurement is a cryptographic hash that uniquely identifies an enclave. It's computed at enclave load time and becomes immutable—the enclave cannot modify its own measurement.
+A measurement is a cryptographic hash that uniquely identifies an enclave. It's computed at enclave load time and becomes immutable-the enclave cannot modify its own measurement.
 
 ### Measurement Derivation
 
@@ -163,7 +163,7 @@ The measurement includes:
 - **Data layout:** Initial heap and stack configuration
 - **Security attributes:** Flags like debug mode, KSS (Key Separation & Sharing), memory encryption mode
 
-Any change—a single byte in the binary, a different compiler flag, a modified linker script—produces a different measurement.
+Any change-a single byte in the binary, a different compiler flag, a modified linker script-produces a different measurement.
 
 ### Two Types of Identity
 
@@ -174,7 +174,7 @@ Any change—a single byte in the binary, a different compiler flag, a modified 
 
 **MRENCLAVE** is the stricter check. It changes with every rebuild unless builds are perfectly reproducible. Use it when you need to pin to an exact version.
 
-**MRSIGNER** allows for enclave updates without changing the expected identity. Use it when you trust the enclave author to ship safe updates—but recognize this means trusting their build and release process.
+**MRSIGNER** allows for enclave updates without changing the expected identity. Use it when you trust the enclave author to ship safe updates-but recognize this means trusting their build and release process.
 
 ### Reproducible Builds Matter
 
@@ -279,7 +279,7 @@ When you verify an attestation, you implicitly trust:
 | **Microcode** | No bugs or backdoors in CPU firmware |
 | **Collateral source** | TCB info and revocation data are accurate and fresh |
 
-This is a significant trust surface. Hardware vulnerabilities (Spectre, Foreshadow, etc.) have repeatedly demonstrated that "hardware root of trust" doesn't mean "unconditionally secure." Attestation proves the enclave matches expectations *given current known vulnerabilities*—the TCB status encodes this.
+This is a significant trust surface. Hardware vulnerabilities (Spectre, Foreshadow, etc.) have repeatedly demonstrated that "hardware root of trust" doesn't mean "unconditionally secure." Attestation proves the enclave matches expectations *given current known vulnerabilities*-the TCB status encodes this.
 
 ### Minimizing Trust with ZK
 
@@ -289,7 +289,7 @@ ZK proofs can reduce what the verifier must trust:
 - **Policy compliance:** Prove the measurement matches one of N approved binaries without revealing which
 - **Selective disclosure:** Prove properties of the attestation (e.g., "not debug mode") without revealing the full quote
 
-The hardware trust remains—ZK can't fix a compromised CPU. But ZK can minimize trust in the verification infrastructure.
+The hardware trust remains-ZK can't fix a compromised CPU. But ZK can minimize trust in the verification infrastructure.
 
 ---
 
@@ -479,7 +479,7 @@ For blockchain applications, ZK verification increasingly represents the best tr
 
 This post covered attestation concepts that apply across platforms. The model is consistent whether you're working with Intel SGX, AMD SEV-SNP, or other TEE implementations.
 
-The next post dives into Intel DCAP specifically—the certificate hierarchy, FMSPC codes, TCB levels, and QE identity verification. These are the concrete details you need to implement or audit a DCAP-based system.
+The next post dives into Intel DCAP specifically-the certificate hierarchy, FMSPC codes, TCB levels, and QE identity verification. These are the concrete details you need to implement or audit a DCAP-based system.
 
 Later in the series, we will cover cross-platform differences (AMD SEV-SNP, AWS Nitro, ARM CCA) and how to build verification infrastructure that abstracts over them.
 
@@ -487,5 +487,5 @@ Later in the series, we will cover cross-platform differences (AMD SEV-SNP, AWS 
 
 ---
 
-**Previous:** [Part I — X.509 Verification On-Chain](01-x509-verification-on-chain.md)  
-**Next:** [Part III — Intel DCAP Certificate Hierarchy](03-intel-dcap-certificate-hierarchy.md)
+**Previous:** [Part I - X.509 Verification On-Chain](01-x509-verification-on-chain.md)  
+**Next:** [Part III - Intel DCAP Certificate Hierarchy](03-intel-dcap-certificate-hierarchy.md)
