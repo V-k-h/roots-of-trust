@@ -11,7 +11,9 @@ The TEE landscape is fragmented.
 [AWS Nitro Enclaves](https://docs.aws.amazon.com/enclaves/latest/user/nitro-enclave.html),
 and
 [ARM Confidential Compute Architecture (CCA)](https://www.arm.com/architecture/security-features/arm-confidential-compute-architecture)
-each have their own attestation format, certificate hierarchy, and cryptographic choices.Building verification infrastructure that works across platforms requires understanding these differences.
+each have their own attestation format, certificate hierarchy, and cryptographic choices. Building verification infrastructure that works across platforms requires understanding these differences.
+
+These certificate and report structures are straightforward to verify in native software, but they become much harder to handle inside the EVM. The main reason is AMD's choice of P-384 signatures.
 
 This post examines the three major alternatives to [Intel Data Center Attestation Primitives (DCAP)](https://download.01.org/intel-sgx/sgx-dcap/): AMD SEV-SNP, AWS Nitro Enclaves, and ARM CCA. For each, we cover the trust model, certificate structure, attestation format, and on-chain verification feasibility. The goal is a clear map of what works, what doesn't, and where the gaps are.
 
@@ -23,15 +25,15 @@ There is no universal TEE attestation standard. Each vendor designed their syste
 
 | Platform | Vendor | Curve | Root of Trust | Quote Format |
 |----------|--------|-------|---------------|--------------|
-| SGX/TDX | Intel | P-256 | Silicon (fused key) | DCAP Quote v3/v4 |
-| SEV-SNP | AMD | P-384 | Silicon (fused key) | Attestation Report |
+| SGX/TDX | Intel | P-256 | Silicon (hardware-rooted keys) | DCAP Quote v3/v4 |
+| SEV-SNP | AMD | P-384 | Silicon (hardware-rooted keys) | Attestation Report |
 | Nitro | AWS | P-384 | AWS HSM | COSE Sign1 (CBOR) |
 | CCA | ARM | P-256/P-384 | Silicon (CCA token) | EAT (CBOR) |
 
 This fragmentation creates challenges:
 
 1. **No shared verification code:** Each platform needs custom parsing and validation logic
-2. **Different cryptographic requirements:** P-384 has no EVM precompile
+2. **Different cryptographic requirements:** P-384 ([secp384r1](https://www.secg.org/sec2-v2.pdf)) has no EVM precompile
 3. **Different trust assumptions:** Some root in silicon, others in cloud provider infrastructure
 4. **Different collateral systems:** Intel has PCCS, AMD has KDS, AWS has their own infrastructure
 
@@ -73,7 +75,7 @@ flowchart TD
     
     ASK["AMD SEV Key (ASK)<br>• ECDSA P-384<br>• Intermediate CA<br>• One per CPU product line"]
     
-    VCEK["Versioned Chip Endorsement Key (VCEK)<br>• ECDSA P-384<br>• Unique per CPU + TCB version<br>• Retrieved from AMD KDS"]
+    VCEK["Versioned Chip Endorsement Key (VCEK)<br>• ECDSA P-384<br>• Unique per CPU + TCB version<br>• Retrieved from [AMD Key Distribution Service (KDS)](https://kdsintf.amd.com/)"]
     
     Report["Attestation Report<br>• Signed by VCEK<br>• Contains measurement and policy"]
     
@@ -120,7 +122,9 @@ flowchart TD
     Header --> Measurement --> TCB --> Signature
 
 ```
-
+These certificate and report structures are straightforward to verify in
+native software, but they become much harder to handle inside the EVM.
+The main reason is AMD's choice of P-384 signatures.
 ### The P-384 Challenge
 
 AMD's use of P-384 (secp384r1) creates significant challenges for on-chain verification:
@@ -164,9 +168,8 @@ flowchart LR
 
 ## AWS Nitro Enclaves
 
-AWS Nitro Enclaves provide isolation on AWS infrastructure—but with a fundamentally different trust model. The root of trust is AWS's infrastructure, not silicon.
-
-### Trust Model Difference
+[AWS Nitro Enclaves](https://docs.aws.amazon.com/enclaves/latest/user/nitro-enclave.html)
+provide isolated execution environments on AWS infrastructure—but with a fundamentally different trust model. Instead of vendor silicon keys, attestation chains to an AWS-managed root certificate anchored in the AWS Nitro infrastructure rather than CPU vendor silicon.
 
 ```mermaid
 flowchart LR
@@ -218,8 +221,12 @@ Nitro uses Platform Configuration Registers (PCRs) instead of a single measureme
 
 ### Attestation Document Format
 
-Nitro attestations use [COSE Sign1](https://datatracker.ietf.org/doc/html/rfc8152) (CBOR Object Signing and Encryption):
-
+Nitro attestation documents are encoded as
+[COSE Sign1](https://datatracker.ietf.org/doc/html/rfc9052) objects
+(CBOR Object Signing and Encryption). The signature covers the protected
+headers and payload, while the payload itself is a
+[CBOR](https://datatracker.ietf.org/doc/html/rfc8949)
+structure containing PCR measurements, metadata, and certificate material.
 ```mermaid
 flowchart TD
     subgraph COSE["COSE_Sign1 Structure"]
@@ -233,11 +240,7 @@ flowchart TD
     Protected -.included in signing.- Signature
     Payload -.included in signing.- Signature
 ```
-Nitro attestation documents are encoded as
-[COSE Sign1](https://datatracker.ietf.org/doc/html/rfc9052) objects,
-where the signature covers the protected headers and payload.
-The payload itself is a [CBOR](https://datatracker.ietf.org/doc/html/rfc8949)
-structure containing PCR measurements, metadata, and certificate material.
+
 
 ### Trust Implications
 
@@ -257,14 +260,18 @@ Nitro is appropriate when:
 ## ARM Confidential Compute Architecture (CCA)
 
 [ARM Confidential Compute Architecture (CCA)](https://developer.arm.com/documentation/den0125/latest)
-is the newest entrant—designed for mobile and edge devices with increasing data center adoption.
+is the newest entrant in the TEE landscape—initially designed for mobile
+and edge systems but increasingly targeted at data center deployments.
 
 CCA introduces a new execution environment called a **Realm**.
 Realms are isolated virtual machines whose memory and execution state
-are protected from the host operating system and hypervisor. They are
-managed by a privileged component called the
+are protected from the host operating system and hypervisor.
+
+Realm lifecycle and isolation are enforced by the
 [Realm Management Monitor (RMM)](https://developer.arm.com/documentation/den0137/latest),
-which runs at EL2 and enforces isolation between the host and Realm worlds.
+a privileged component that runs at EL2 and mediates all transitions
+between the normal world and the Realm world.
+
 ### Architecture Overview
 
 ```mermaid
@@ -338,45 +345,50 @@ ARM CCA is still emerging for blockchain use cases:
 ### On-Chain Verification Feasibility
 
 ```mermaid
-flowchart TD
-    subgraph Intel["Intel SGX/TDX"]
-        I1["Native Solidity\n~86k gas (L2)"] --> OK1[✅ Production]
-        I2["ZK Proof\n~200k gas"] --> OK2[✅ Production]
-    end
-    
-    subgraph AMD["AMD SEV-SNP"]
-        A1["Native Solidity\n~1.2M gas"] --> Warn1[⚠️ Expensive]
-        A2["ZK Proof\n~200k gas"] --> OK3[✅ Practical]
-    end
-    
-    subgraph AWS["AWS Nitro"]
-        N1["Native Solidity\n~1.2M gas"] --> Warn2[⚠️ Expensive]
-        N2["ZK Proof\n~200k gas"] --> OK4[✅ Practical]
-    end
-    
-    subgraph ARM["ARM CCA"]
-        C1["Native Solidity\nDepends"] --> Unknown[❓ No tooling]
-        C2["ZK Proof\n~200k gas"] --> OK5[✅ Practical]
-    end
+flowchart TB
+
+    H1["Platform"]
+    H2["Approach"]
+    H3["Assessment"]
+
+    H1 --- H2
+    H2 --- H3
+
+    P1["Intel SGX/TDX"] --- A1["Native Solidity<br>~86k gas (L2)"] --- R1["✅ Production"]
+    P2["Intel SGX/TDX"] --- A2["ZK Proof<br>~200k gas"] --- R2["✅ Production"]
+
+    P3["AMD SEV-SNP"] --- A3["Native Solidity<br>~1.2M gas"] --- R3["⚠️ Expensive"]
+    P4["AMD SEV-SNP"] --- A4["ZK Proof<br>~200k gas"] --- R4["✅ Practical"]
+
+    P5["AWS Nitro"] --- A5["Native Solidity<br>~1.2M gas"] --- R5["⚠️ Expensive"]
+    P6["AWS Nitro"] --- A6["ZK Proof<br>~200k gas"] --- R6["✅ Practical"]
+
+    P7["ARM CCA"] --- A7["Native Solidity<br>Depends"] --- R7["❓ No tooling"]
+    P8["ARM CCA"] --- A8["ZK Proof<br>~200k gas"] --- R8["✅ Practical"]
 ```
 
 ### Trust Spectrum
 
 ```mermaid
 flowchart LR
-    Trustless["MORE TRUSTLESS"] -.-> Trust["MORE TRUST"]
-    
-    Intel["Intel SGX/TDX\nSilicon root\n(can't forge)"]
-    AMD["AMD SEV-SNP\nSilicon root\n(can't forge)"]
-    ARM["ARM CCA\nSilicon root\n(can't forge)"]
-    AWS["AWS Nitro\nAWS HSM root\n(could forge)"]
-    
-    Intel --> AMD --> ARM --> AWS
-    
+    Trustless["MORE TRUSTLESS"]
+    Trust["MORE TRUST"]
+
+    Intel["Intel SGX/TDX<br>Silicon root"]
+    AMD["AMD SEV-SNP<br>Silicon root"]
+    ARM["ARM CCA<br>Silicon root"]
+    AWS["AWS Nitro<br>AWS HSM root"]
+
+    Trustless --> Intel
+    Intel --> AMD --> ARM --> AWS --> Trust
+
     style Intel fill:#27ae60,color:#fff
     style AMD fill:#27ae60,color:#fff
     style ARM fill:#27ae60,color:#fff
     style AWS fill:#f39c12,color:#fff
+    
+    style Trustless fill:#2ecc71,color:#fff
+    style Trust fill:#e67e22,color:#fff
 ```
 
 ---
