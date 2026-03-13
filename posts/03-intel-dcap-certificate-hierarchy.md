@@ -4,11 +4,11 @@
 
 ---
 
-Intel's Data Center Attestation Primitives (DCAP) is the attestation framework for SGX and TDX in data center environments. Unlike the older EPID model—which relied on Intel's attestation service as a central verifier—DCAP enables fully decentralized verification. Anyone with the right collateral can verify a quote without contacting Intel.
+Intel's [Data Center Attestation Primitives (DCAP)](https://download.01.org/intel-sgx/sgx-dcap/) is the attestation framework for[Intel SGX](https://www.intel.com/content/www/us/en/developer/tools/software-guard-extensions/overview.html) (Software Guard Extensions) and [Intel TDX](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html) (Trust Domain Extensions) in data center environments. Unlike the older [EPID](https://en.wikipedia.org/wiki/Enhanced_Privacy_ID) model—which relied on Intel's attestation service as a central verifier—DCAP enables fully decentralized verification. Anyone with the right collateral can verify a quote without contacting Intel.
 
 This makes DCAP the natural fit for blockchain applications. But DCAP verification requires understanding a specific certificate hierarchy, proprietary extensions, and a collateral system that doesn't map cleanly to standard PKI patterns.
 
-This post is the technical reference. We'll cover the certificate chain structure, PCK certificate extensions, FMSPC encoding, TCB status evaluation, and how this maps to on-chain verification—including Solidity snippets and TDX-specific differences throughout.
+This post is the technical reference. We'll cover the certificate chain structure, [PCK](https://download.01.org/intel-sgx/sgx-dcap/) certificate extensions, FMSPC encoding, TCB status evaluation, and how this maps to on-chain verification—including Solidity snippets and TDX-specific differences throughout.
 
 ---
 
@@ -31,7 +31,7 @@ For blockchain applications, DCAP's properties are essential. You can't build tr
 
 ### SGX vs TDX in DCAP
 
-DCAP supports both SGX (Software Guard Extensions) and TDX (Trust Domain Extensions). The certificate hierarchy and collateral system are shared, but quote structures differ:
+DCAP supports both SGX and TDX. The certificate hierarchy and collateral system are shared, but quote structures differ:
 
 | Aspect | SGX | TDX |
 |--------|-----|-----|
@@ -47,26 +47,32 @@ The verification pipeline is structurally identical. We'll note TDX-specific dif
 
 ## The Certificate Hierarchy
 
+The PCK certificate is part of the X.509 certificate hierarchy, but the attestation quote itself is signed by a QE attestation key whose trust is
+established through that collateral chain. In other words, the certificate chain certifies the key; the key signs the quote.
+
 DCAP uses a three-level certificate hierarchy anchored to Intel's root CA.
 
 ```mermaid
 flowchart TD
-    Root["INTEL SGX ROOT CA\n• Self-signed, ECDSA P-256\n• Validity: 2016-2049\n• Same root for SGX and TDX"]
+    Root["Intel SGX Root CA<br>• Self-signed, ECDSA P-256<br>• Validity: 2016–2049<br>• Shared trust anchor for SGX and TDX collateral"]
     
-    subgraph Intermediate["INTERMEDIATE CA (Platform-specific)"]
-        PlatformCA["Intel SGX PCK\nPlatform CA\n(Multi-package)"]
-        ProcessorCA["Intel SGX PCK\nProcessor CA\n(Single-package)"]
+    subgraph Intermediate["Intermediate CA"]
+        PlatformCA["Intel SGX PCK Platform CA<br>(multi-package platforms)"]
+        ProcessorCA["Intel SGX PCK Processor CA<br>(single-package platforms)"]
     end
     
-    PCK["PCK CERTIFICATE (Per-CPU)\n• ECDSA P-256 (unique per CPU + TCB)\n• Contains: FMSPC, TCB levels, SGX Type\n• TDX: includes TDX Module SVN"]
+    PCK["PCK Certificate<br>• ECDSA P-256<br>• Platform-specific<br>• Encodes FMSPC and TCB-related extensions"]
     
-    Quote["ATTESTATION QUOTE\n• Signed via QE attestation key\n• Contains MRENCLAVE, report data"]
+    AK["QE Attestation Key<br>• Certified via PCK collateral"]
+    
+    Quote["Attestation Quote<br>• Signed by QE attestation key<br>• Contains measurement and report data"]
     
     Root -->|signs| PlatformCA
     Root -->|signs| ProcessorCA
     PlatformCA -->|signs| PCK
     ProcessorCA -->|signs| PCK
-    PCK -->|signs| Quote
+    PCK -->|certifies| AK
+    AK -->|signs| Quote
     
     style Root fill:#3498db,color:#fff
     style PCK fill:#9b59b6,color:#fff
@@ -107,13 +113,20 @@ The PCK certificate is a standard X.509v3 certificate with Intel-specific extens
 Intel defines extensions under the OID arc `1.2.840.113741.1.13.1`. These are non-critical extensions.
 
 ```mermaid
-mindmap
-  root((PCK Extensions\nOID: 1.2.840.113741.1.13.1))
-    PPID[".1 PPID\n16 bytes, encrypted\nPlatform Provisioning ID"]
-    TCB[".2 TCB\n16 SGX SVN components\n+ PCESVN\nTDX: additional components"]
-    PCEID[".3 PCE-ID\n2 bytes\nProvisioning Cert Enclave ID"]
-    FMSPC[".4 FMSPC\n6 bytes\nFamily-Model-Stepping-Platform-SKU"]
-    SGXType[".5 SGX Type\n0=Standard\n1=Scalable\n2=Scalable+Integrity"]
+flowchart TD
+    RootOID["Intel SGX Extension OID<br>1.2.840.113741.1.13.1"]
+    
+    PPID[".1 PPID<br>16 bytes, encrypted<br>Platform Provisioning ID"]
+    TCB[".2 TCB<br>16 SGX SVN components<br>+ PCESVN<br>TDX: additional components"]
+    PCEID[".3 PCE-ID<br>2 bytes<br>Provisioning Cert Enclave ID"]
+    FMSPC[".4 FMSPC<br>6 bytes<br>Family-Model-Stepping-Platform-CustomSKU"]
+    SGXType[".5 SGX Type<br>0 = Standard<br>1 = Scalable<br>2 = Scalable + Integrity"]
+
+    RootOID --> PPID
+    RootOID --> TCB
+    RootOID --> PCEID
+    RootOID --> FMSPC
+    RootOID --> SGXType
 ```
 
 ### Parsing PCK Extensions in Solidity
@@ -196,23 +209,24 @@ library PCKExtensionParser {
 
 ## FMSPC and Platform Identification
 
-FMSPC (Family-Model-Stepping-Platform-CustomSKU) is the 6-byte identifier that maps a CPU to its TCBInfo. Understanding FMSPC is essential for collateral retrieval and verification.
+FMSPC (Family-Model-Stepping-Platform-CustomSKU) is the 6-byte platform identifier Intel uses to map a platform certificate to the appropriate TCBInfo collateral. Understanding FMSPC is essential for collateral retrieval and verification.
 
 ### FMSPC Structure
 
 ```mermaid
 flowchart LR
     subgraph FMSPC["FMSPC (6 bytes)"]
-        B01["Bytes 0-1\nFamily + Model\ne.g., 0x00806 = Ice Lake"]
-        B2["Byte 2\nStepping\ne.g., 0x0C = C0"]
-        B3["Byte 3\nPlatform Type"]
-        B45["Bytes 4-5\nCustom SKU\nReserved"]
+        B01["Bytes 0-1<br>Family + Model<br>e.g., 0x00806 = Ice Lake"]
+        B2["Byte 2<br>Stepping <br>e.g., 0x0C = C0"]
+        B3["Byte 3<br>Platform Type"]
+        B45["Bytes 4-5<br>Custom SKU<br>Reserved"]
     end
     
     B01 --> B2 --> B3 --> B45
 ```
 
 **Example FMSPC values:**
+These examples are illustrative; in practice, the verifier treats FMSPC as an opaque 6-byte platform identifier used to select the correct TCBInfo collateral.
 - `00906ED500FF`: Xeon Scalable (Ice Lake)
 - `00806C0100FF`: Xeon E (Coffee Lake)
 - `00A06F0500FF`: Xeon Scalable 4th Gen (Sapphire Rapids)
@@ -233,26 +247,24 @@ TCBInfo is a signed JSON document from Intel that defines the security levels fo
 
 ```mermaid
 flowchart TD
-    subgraph TCBInfo["TCBInfo JSON"]
-        Header["Header\n• version: 3\n• issueDate, nextUpdate\n• fmspc, pceId\n• tcbType (0=SGX, 1=TDX)"]
-        
-        TDXModule["TDX Module (TDX only)\n• mrsigner\n• attributes + mask"]
-        
-        Levels["tcbLevels[] (ordered highest-first)"]
-        
-        subgraph Level["Each Level"]
-            TCB["tcb:\n• sgxtcbcomponents[16]\n• pcesvn\n• tdxtcbcomponents (TDX)"]
-            Status["tcbStatus:\nUpToDate | OutOfDate | Revoked"]
-            Advisory["advisoryIDs[]:\nINTEL-SA-00615, etc."]
-        end
-        
-        Sig["signature: ECDSA over tcbInfo"]
-    end
+    Header["TCBInfo Header<br>• version<br>• issueDate / nextUpdate<br>• fmspc / pceId<br>• tcbType"]
+    
+    TDXModule["TDX Module Info (TDX only)<br>• mrsigner<br>• attributes + mask"]
+    
+    Levels["tcbLevels[]<br>ordered highest-first"]
+    
+    TCB["tcb<br>• sgxtcbcomponents[16]<br>• pcesvn<br>• tdxtcbcomponents (TDX)"]
+    Status["tcbStatus<br>UpToDate / OutOfDate / Revoked / ..."]
+    Advisory["advisoryIDs[]<br>INTEL-SA-*"]
+    
+    Sig["signature<br>ECDSA over tcbInfo"]
     
     Header --> TDXModule
-    TDXModule --> Levels
-    Levels --> Level
-    Level --> Sig
+    Header --> Levels
+    Levels --> TCB
+    Levels --> Status
+    Levels --> Advisory
+    Header --> Sig
 ```
 
 ### TCB Status Values
@@ -337,14 +349,15 @@ The QE (Quoting Enclave) is Intel's signed enclave that transforms local reports
 
 ### QEIdentity Structure
 
+QEIdentity is Intel-signed collateral that specifies which Quoting Enclave identities are valid for a given attestation model and TCB state.
 ```mermaid
 flowchart LR
     subgraph QEIdentity["QEIdentity JSON"]
-        Header["id: 'QE' or 'TD_QE'\nversion: 2\nissueDate, nextUpdate"]
+        Header["id: 'QE' or 'TD_QE'<br>version: 2<br>issueDate, nextUpdate"]
         
-        Identity["Identity Fields:\n• mrsigner (expected QE signer)\n• isvprodid (product ID)\n• tcbLevels[]"]
+        Identity["Identity Fields:<br>• mrsigner (expected QE signer)<br>• isvprodid (product ID)<br>• tcbLevels[]"]
         
-        Attrs["Attributes:\n• attributes (expected flags)\n• attributesMask (which bits matter)\n• miscselect / miscselectMask"]
+        Attrs["Attributes:<br>• attributes (expected flags)<br>• attributesMask (which bits matter)<br>• miscselect / miscselectMask"]
         
         Sig["signature"]
     end
@@ -419,13 +432,13 @@ library QEIdentityVerifier {
 
 ## Collateral and PCCS
 
-Collateral is the supporting data needed to verify a quote. Intel provides this through the Provisioning Certification Service (PCS), typically cached locally via PCCS.
+Collateral is the supporting data needed to verify a quote. Intel provides this through the Provisioning Certification Service ([PCS](https://api.portal.trustedservices.intel.com/)), typically cached locally via [PCCS](https://download.01.org/intel-sgx/sgx-dcap/).
 
 ### Collateral Components
 
 | Component | Source | Purpose |
 |-----------|--------|---------|
-| PCK Certificate | PCS | Signs the quote |
+| PCK Certificate | PCS | Anchors trust in the platform attestation collateral |
 | PCK CRL | PCS | Certificate revocation |
 | Intermediate CA Cert | PCS | Chain link |
 | Root CA Cert | Embedded | Trust anchor |
@@ -436,16 +449,16 @@ Collateral is the supporting data needed to verify a quote. Intel provides this 
 
 ```mermaid
 flowchart TD
-    PCS["Intel PCS\n(api.trustedservices.intel.com)"]
+    PCS["Intel PCS<br>(api.trustedservices.intel.com)"]
     
-    LocalPCCS["Local PCCS\n(Caching Layer)"]
+    LocalPCCS["Local PCCS<br>(Caching Layer)"]
     
     PCS -->|"Fetch HTTPS"| LocalPCCS
     
-    LocalPCCS --> OffChain["Off-Chain Verifier\n(Traditional)"]
-    LocalPCCS --> OnChain["On-Chain PCCS\n(Automata approach)"]
+    LocalPCCS --> OffChain["Off-Chain Verifier<br>(Traditional)"]
+    LocalPCCS --> OnChain["On-Chain PCCS<br>(Automata approach)"]
     
-    OnChain --> DCAPVerifier["DCAP Verifier Contract\nReads collateral on-chain\nVerifies quote"]
+    OnChain --> DCAPVerifier["DCAP Verifier Contract<br>Reads collateral on-chain<br>Verifies quote"]
     
     style PCS fill:#3498db,color:#fff
     style OnChain fill:#9b59b6,color:#fff
@@ -460,21 +473,21 @@ Putting it all together, here's the complete DCAP verification flow:
 
 ```mermaid
 flowchart TD
-    Input["INPUT\nQuote + Collateral"]
+    Input["Input<br>Quote + Collateral"]
     
-    Step1["1. PARSE QUOTE\n• Extract header, report body\n• Extract QE report\n• Extract signature data\n\nTDX: Parse 584-byte TD Report"]
+    Step1["1. Parse Quote<br>• Extract header, report body<br>• Extract QE report<br>• Extract signature data<br><br>TDX: parse 584-byte TD report"]
     
-    Step2["2. VERIFY QE IDENTITY\n• Fetch QEIdentity from PCCS\n• Verify Intel signature\n• Check MRSIGNER, ISVSVN\n• Verify attributes with mask\n\nTDX: Use TD_QE identity"]
+    Step2["2. Verify PCK Chain<br>• Parse PCK certificate<br>• Verify chain to Intel Root<br>• Check validity periods<br>• Check CRL status"]
     
-    Step3["3. VERIFY PCK CHAIN\n• Parse PCK certificate\n• Verify chain to Intel Root\n• Check validity periods\n• Check CRL (not revoked)"]
+    Step3["3. Verify QE Identity<br>• Fetch QEIdentity<br>• Verify Intel signature<br>• Check MRSIGNER / ISVSVN<br>• Verify attributes with mask"]
     
-    Step4["4. EVALUATE TCB\n• Extract FMSPC from PCK\n• Fetch TCBInfo\n• Match platform SVNs\n• Determine status\n\nTDX: Also verify TDX Module"]
+    Step4["4. Evaluate TCB<br>• Extract FMSPC from PCK<br>• Fetch TCBInfo<br>• Match platform SVNs<br>• Determine status<br><br>TDX: also verify TDX Module"]
     
-    Step5["5. VERIFY QUOTE SIG\n• Reconstruct signed data\n• Extract attestation key\n• Verify ECDSA-P256"]
+    Step5["5. Verify Quote Signature<br>• Reconstruct signed data<br>• Extract attestation key<br>• Verify ECDSA-P256"]
     
-    Step6["6. APPLY POLICY\n• MRENCLAVE match?\n• Debug disabled?\n• TCB acceptable?\n• Report data valid?"]
+    Step6["6. Apply Policy<br>• MRENCLAVE match?<br>• Debug disabled?<br>• TCB acceptable?<br>• Report data valid?"]
     
-    Output["OUTPUT\nVERIFIED / REJECTED"]
+    Output["Output<br>Verified / Rejected"]
     
     Input --> Step1
     Step1 --> Step2
@@ -499,11 +512,16 @@ flowchart TD
 | Quote Sig | Verification failed | Quote tampering |
 | Policy | MRENCLAVE mismatch | Wrong enclave code |
 
+Once the collateral model is clear, the on-chain question becomes an engineering tradeoff: which portions of the DCAP pipeline execute on-chain,
+which remain off-chain, and how the resulting trust assumptions are exposed to applications.
 ---
 
 ## On-Chain Implementation
 
 ### Gas Breakdown
+
+The following gas figures are rough order-of-magnitude estimates and vary
+by implementation details, calldata size, and chain-specific precompile support.
 
 | Operation | Gas (with RIP-7212) | Gas (without) |
 |-----------|---------------------|---------------|
@@ -520,23 +538,23 @@ flowchart TD
 ```mermaid
 flowchart LR
     subgraph Pattern1["Full On-Chain (L2)"]
-        Q1[Quote] --> V1[DCAP Verifier]
-        V1 --> PCCS1[On-Chain PCCS]
-        V1 --> R1[Result]
+        Q1["Quote"] --> V1["DCAP Verifier"]
+        PCCS1["On-Chain PCCS"] --> V1
+        V1 --> R1["Result"]
     end
     
     subgraph Pattern2["ZK Proof"]
-        Q2[Quote] --> ZK[Off-Chain ZK Prover]
-        ZK --> Proof[ZK Proof]
-        Proof --> V2[Groth16 Verifier]
-        V2 --> R2[Result]
+        Q2["Quote + Collateral"] --> ZK["Off-Chain ZK Prover"]
+        ZK --> Proof["ZK Proof"]
+        Proof --> V2["Groth16 Verifier"]
+        V2 --> R2["Result"]
     end
     
     subgraph Pattern3["Optimistic"]
-        Q3[Quote] --> Submit[Submit Claim]
-        Submit --> Challenge{Challenge?}
-        Challenge -->|Yes| FraudProof[Verify Fraud Proof]
-        Challenge -->|No| R3[Accept after delay]
+        Q3["Quote"] --> Submit["Submit Claim"]
+        Submit --> Challenge{"Challenge?"}
+        Challenge -->|Yes| FraudProof["Verify Fraud Proof"]
+        Challenge -->|No| R3["Accept after delay"]
     end
 ```
 
@@ -556,7 +574,6 @@ The next post covers cross-platform attestation—AMD SEV-SNP, AWS Nitro, and AR
 
 ---
 
----
 
 **Previous:** [Part II — TEE Attestation Model](02-tee-attestation-model.md)  
 **Next:** [Part IV — Cross-Platform Attestation](04-cross-platform-attestation.md)
