@@ -2,7 +2,13 @@
 
 **X.509, TEE Attestation, and Verifiable Infrastructure**
 
-A technical blog series exploring how Trusted Execution Environments (TEEs) enable verifiable infrastructure for blockchain systems. Written for engineers with blockchain background who need to understand or implement TEE verification.
+A technical blog series examining how Trusted Execution Environments (TEEs) enable verifiable infrastructure for blockchain systems.
+
+The series focuses on attestation verification, certificate chains, and the practical constraints of implementing TEE verification in smart contracts.
+
+Written for blockchain and infrastructure engineers who need to understand or implement TEE attestation verification.
+
+**Keywords:** TEE, SGX, attestation, DCAP, confidential computing, SEV-SNP, zk proofs, blockchain infrastructure
 
 ---
 
@@ -24,10 +30,10 @@ A technical blog series exploring how Trusted Execution Environments (TEEs) enab
 
 | Approach | Gas | Notes |
 |----------|-----|-------|
-| P-256 (RIP-7212) | ~3,450 | L2 precompile |
+| P-256 verification (RIP-7212) | ~3,450 | L2 precompile |
 | P-256 (Pure Solidity) | ~350,000 | Expensive |
 | P-384 (Pure Solidity) | ~800,000+ | AMD SEV-SNP |
-| Full DCAP (L2) | ~86,000 | With RIP-7212 |
+| Full DCAP verification (L2) | ~86,000 | With RIP-7212 |
 | ZK Proof (Groth16) | ~200,000 | Any platform |
 | ecrecover | ~3,000 | For reference |
 
@@ -44,7 +50,7 @@ Silicon Root (can't forge)              Cloud Root (could forge)
 
 ## Code Examples
 
-Solidity snippets throughout the posts are **illustrative**, not production-ready. For production implementations:
+Solidity snippets in the posts illustrate verification patterns and are not production-ready implementations.
 
 | Project | Focus | Repository |
 |---------|-------|------------|
@@ -69,4 +75,4 @@ Content is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.
 
 ## Contributing
 
-Found an error? Have a suggestion? [Open an issue](../../issues) or submit a PR.
+Found an error or have a suggestion? Open an issue or submit a pull request.
